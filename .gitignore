@@ -1,0 +1,114 @@
+# =============================================================
+# jailbreak-noiseFit .gitignore
+# Python builder + Android/Java uploader + PowerShell scripts
+# =============================================================
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# ---------- Android / Java / Gradle ----------
+.gradle/
+*.class
+*.apk
+*.aab
+*.ap_
+*.dex
+bin/
+gen/
+out/
+captures/
+.cxx/
+.externalNativeBuild/
+local.properties
+proguard/
+
+# Keep the pre-built uploader APK that ships with the repo
+!NoiseFit_Halo_uploader.apk
+
+# Signing material: never commit
+*.jks
+*.keystore
+keystore.properties
+google-services.json
+
+# ---------- IDEs and editors ----------
+.idea/
+*.iml
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+*.swp
+*.swo
+*~
+
+# ---------- OS files ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+$RECYCLE.BIN/
+
+# ---------- Generated build output ----------
+# Faces and replay scripts you build locally from your own images.
+# The curated test faces in main/watchfaces/ are NOT ignored.
+/*.lz
+/face*.lz
+/output/
+/outputs/
+replay*.txt
+!Docs/**/replay*.txt
+
+# ---------- Local captures and logs ----------
+# Raw HCI captures, logcat dumps and bug reports contain your watch's MAC
+# address and other identifiers. Keep personal ones out of git.
+# Curated, reviewed files under Docs/ are intentionally tracked.
+/*.log
+/logcat*.txt
+/logcat*.log
+/btsnoop*
+/bugreport*.zip
+*.pcap
+*.pcapng
+*.cfa
+private/
+local/
+scratch/
+
+# ---------- Secrets and local config ----------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.*
+*.local.json
+
+# ---------- Temporary files ----------
+tmp/
+temp/
+*.tmp
+*.bak
+*.orig

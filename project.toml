@@ -3,7 +3,7 @@ name = "NoiseFit-Halo-Face-Builder"
 description = "Offline pipeline to convert photos → RGB565 → FastLZ → AFAFAF02 container → BLE upload to NoiseFit Halo watch. No server calls, no root, no Python dependency on phone (PC path)."
 version = "2.0.0"
 license = "MIT"
-repository = "https://github.com/jay/NoiseFit-Halo-Face-Builder"
+repository = "https://github.com/star-warrior/jailbreak-noiseFit"
 
 [metadata]
 author = "Jay"
@@ -52,5 +52,5 @@ macos = true
 android-studio = true
 
 [issues]
-tracker = "https://github.com/jay/NoiseFit-Halo-Face-Builder/issues"
-documentation = "https://github.com/jay/NoiseFit-Halo-Face-Builder/wiki"
+tracker = "https://github.com/star-warrior/jailbreak-noiseFit/issues"
+documentation = "https://github.com/star-warrior/jailbreak-noiseFit/wiki"

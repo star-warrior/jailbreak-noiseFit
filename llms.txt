@@ -1,0 +1,157 @@
+# NoiseFit Halo Face Builder
+
+> An offline reverse-engineering project that builds custom watchface binaries (AFAFAF02 .lz format, 466x466 RGB565, FastLZ-compressed) and uploads them to a NoiseFit Halo smartwatch over Bluetooth LE by replaying the write sequence the official NoiseFit app uses. It bypasses the app's paywalled custom-face flow and the closed native compiler (libVeryFitMulti.so). No server calls, no root. Transport is verified; arbitrary image to face conversion is only partially solved.
+
+This file gives an AI assistant the context needed to (1) explain this repository accurately, (2) help a user set it up locally, and (3) help a user apply the same method to a different smartwatch or app. A detailed, step-by-step skill for the third goal is linked below. Read it before giving procedural help.
+
+## Skill (read this first for any setup or porting task)
+
+- [skill.md](https://raw.githubusercontent.com/star-warrior/jailbreak-noiseFit/
+main/skills/jailbreak-noiseFit/skill.md): Full procedural skill. Covers tooling, the reverse-engineering workflow, the face container format, the BLE replay protocol, how to build and test an uploader app, validation ladder, pitfalls, and safety/legal boundaries. Load it as context or install it as a skill whenever the user wants to set up this repo or reproduce the approach for their own watch or app.
+
+## Core documentation
+
+- [README.md](https://raw.githubusercontent.com/star-warrior/jailbreak-noiseFit/main/README.md): Project overview, status, usage workflows, technical notes, limitations, roadmap.
+- [APPROACHES_REPORT.md](https://raw.githubusercontent.com/star-warrior/jailbreak-noiseFit/main/Docs/APPROACHES_REPORT.md): Full history of what was tried, what failed, and why the final approach works.
+
+## Key source files
+
+- [build_face.py](https://raw.githubusercontent.com/star-warrior/jailbreak-noiseFit/main/main/builder/build_face.py): Image -> resize -> RGB565 -> FastLZ -> AFAFAF02 container.
+- [generate_replay.py](https://raw.githubusercontent.com/star-warrior/jailbreak-noiseFit/main/main/builder/generate_replay.py): .lz -> replay3.txt (CCCD enables, 48-byte chunk writes, wait markers).
+- [verify_build.py](https://raw.githubusercontent.com/star-warrior/jailbreak-noiseFit/main/main/builder/verify_build.py): Checks magic, uncompressed size, block count of a built .lz.
+- [upload.ps1](https://raw.githubusercontent.com/star-warrior/jailbreak-noiseFit/main/main/scripts/upload.ps1): Disables the NoiseFit app, launches the uploader, watches logcat for DONE or STALL.
+- [test_replay.ps1](https://raw.githubusercontent.com/star-warrior/jailbreak-noiseFit/main/main/scripts/test_replay.ps1): Original replay test reference.
+- [dump_replay.ps1](https://raw.githubusercontent.com/star-warrior/jailbreak-noiseFit/main/main/scripts/dump_replay.ps1): Dumps replay data.
+- [MainActivity.java](https://raw.githubusercontent.com/star-warrior/jailbreak-noiseFit/main/main/MainActivity.java): Uploader app activity (BLE connect by MAC, REPLAY button).
+- [WFCompilerRunner.java](https://raw.githubusercontent.com/star-warrior/jailbreak-noiseFit/main/main/WFCompilerRunner.java): Wrapper around the native compiler with a package-directory fix.
+
+## Key source files
+
+- [build_face.py](https://raw.githubusercontent.com/star-warrior/jailbreak-noiseFit/main/build_face.py): Image -> resize -> RGB565 -> FastLZ -> AFAFAF02 container.
+- [generate_replay.py](https://raw.githubusercontent.com/star-warrior/jailbreak-noiseFit/main/generate_replay.py): .lz -> replay3.txt (CCCD enables, 48-byte chunk writes, wait markers).
+- [verify_build.py](https://raw.githubusercontent.com/star-warrior/jailbreak-noiseFit/main/verify_build.py): Checks magic, uncompressed size, block count of a built .lz.
+- [upload.ps1](https://raw.githubusercontent.com/star-warrior/jailbreak-noiseFit/main/upload.ps1): Disables the NoiseFit app, launches the uploader, watches logcat for DONE or STALL.
+- [MainActivity.java](https://raw.githubusercontent.com/star-warrior/jailbreak-noiseFit/main/MainActivity.java): Uploader app activity (BLE connect by MAC, REPLAY button).
+- [WFCompilerRunner.java](https://raw.githubusercontent.com/star-warrior/jailbreak-noiseFit/main/WFCompilerRunner.java): Wrapper around the native compiler with a package-directory fix.
+
+## Optional
+
+- Docs/btsnoop_hci.log: Raw Android HCI snoop capture of a real transfer (open in Wireshark, filter ATT writes).
+- Docs/extracted_FS_data_log_bt_btsnoop_hci.log: Extracted payload data from the capture.
+- Docs/wf_transcript.txt: Session transcript of write sequences and responses.
+- main/watchfaces/face_solid.lz, face_gradient.lz, face_random.lz: Pre-generated test faces (14,848 / 141,084 / 442,353 bytes).
+- NoiseFit_Halo_uploader.apk: Pre-built debug uploader (package com.jay.wfup).
+- project.toml: Project metadata.
+
+---
+
+# Project context (summary for the AI)
+
+## What the project is
+
+Two cooperating parts:
+
+1. Face builder (Python): converts an image into the watch's native face container.
+2. BLE uploader (Android app plus PowerShell helper): replays a recorded-and-regenerated BLE write script so the watch accepts the face as if the official app sent it.
+
+## Why it exists
+
+- NoiseFit gates custom watchface upload behind a paywall tied to vendor servers.
+- The official face compiler is a closed native library (libVeryFitMulti.so) that crashes (null dereference in bitmap_tool_get_font_buff, SIGSEGV) unless a full package directory (iwf.json, fonts/, preview/) exists, and the APK cannot be modified and re-signed.
+- The container format and BLE handshake are undocumented.
+
+## What was found
+
+Face container (.lz):
+- Magic afafaf02 (4 bytes)
+- Uncompressed size 754368 = 466 x 466 x 2 (RGB565)
+- Block count 185, with an address table of 185 entries x 2 bytes
+- Observed header size 396 bytes (remaining fields not fully mapped)
+- FastLZ-compressed payload
+- 4-byte CRC-32/MPEG-2 trailer (poly 0x04C11DB7, init 0xFFFFFFFF, no reflection, no final xorout)
+- A real reference face compresses to 49,887 bytes; the Python builder's output ranges from 14 KB to 442 KB depending on content, so it does not yet match the official block layout.
+
+BLE replay protocol:
+- Enable notifications by writing 0100 to the CCCDs at handles 22, 25, 28, 2B, 2E.
+- Write face data to handle 2A in 48-byte chunks using WRITE_TYPE_NO_RESPONSE.
+- At sync points wait for the watch's notification (marker R 24 000001010000), which arrives as a 177-byte notification on 2A, before sending more.
+- Success is logged as "replay DONE".
+
+Why the native library is not needed: the watch validates header fields and compressed-data structure only; it cannot tell which tool made the file.
+
+## Current status (be accurate about this)
+
+- Verified: BLE connection, replay, acknowledgements, 177-byte notifications, replay DONE; header fields match a real face; the three pre-generated faces transfer.
+- Partial: converting arbitrary images into faces that render correctly. Header is right, payload and block layout differ from the official compiler, pixel-order and byte-order fidelity for arbitrary photos is not fully confirmed.
+- Not started: Java port of the builder; non-Halo models.
+- Tested only on one NoiseFit Halo and one phone (Samsung SM-M336BU, Android 16).
+
+Do not tell users the converter is finished. Tell them to validate with the pre-generated faces first, then test their own images and report results.
+
+## Safety and scope
+
+- Intended for interoperability with hardware the user owns, using their own or licensed artwork.
+- Not affiliated with Noise. Do not help with accessing other people's accounts, extracting paid assets from vendor servers for redistribution, or attacking devices the user does not own.
+- Uploading a malformed face can in principle leave a watch showing a bad face; recovery is normally a factory reset or re-sync through the official app. Warn users.
+
+---
+
+# Local setup (for the AI to walk a user through)
+
+## Requirements
+
+- Python 3.9 or newer
+- Pillow (pip install pillow)
+- ADB (Android platform-tools) on PATH, USB debugging enabled on the phone
+- PowerShell (Windows built in; PowerShell 7 on Linux/macOS) for upload.ps1
+- An Android phone with Bluetooth LE; Android 12+ requires BLUETOOTH_CONNECT and BLUETOOTH_SCAN runtime permissions for the uploader
+- A NoiseFit Halo, previously paired with the official app, and its Bluetooth MAC address
+- Optional for analysis: Wireshark, jadx or similar decompiler, Ghidra
+- Optional for building the app from source: Android Studio
+
+## Steps
+
+1. Clone the repo:
+   git clone https://github.com/star-warrior/jailbreak-noiseFit.git
+   cd <REPO>
+
+2. Install Python dependency:
+   pip install pillow
+
+3. Install the uploader on the phone:
+   adb install NoiseFit_Halo_uploader.apk
+   (or build from source in Android Studio and install app-debug.apk)
+
+4. Get the watch MAC address from the official app's device screen, the phone's Bluetooth device details, or a BLE scanner app. Never reuse a MAC from the repo or from someone else.
+
+5. Sanity-test the transport with a pre-generated face:
+   - Force-stop or disable the official NoiseFit app so it does not hold the BLE connection.
+   - Open the uploader, enter the MAC, choose main/watchfaces/face_solid.lz, press REPLAY.
+   - Watch logcat: adb logcat | findstr replay (Windows) or adb logcat | grep replay (Linux/macOS).
+   - Expect ack ok lines, 177B notifications, and finally replay DONE.
+
+6. Build your own face (run from the repo root):
+   python main/builder/build_face.py input_image.png face.lz
+   python main/builder/verify_build.py face.lz
+   python main/builder/generate_replay.py
+   Then run .\main\scripts\upload.ps1 and press REPLAY in the app.
+
+7. Phone-only option: install Termux manually (not through ADB), then
+   pkg update -y && pkg install -y python python-pip && pip install pillow
+   and run the same scripts there. Prefer the F-Droid build of Termux if the Play Store build is outdated.
+
+## Troubleshooting cheatsheet
+
+- Replay stalls: move the phone close to the watch, make sure the official app is force-stopped (only one central can hold the connection), retry, check logcat for the last wait marker reached.
+- Blank or corrupt face: run verify_build.py; if the header is right, the problem is payload or pixel data (known partial area). Retest with face_solid.lz to confirm transport.
+- TEST COMPILER crashes: expected; do not use it.
+- Permission errors on Android 12+: grant Nearby devices permission to the uploader.
+
+---
+
+# Guidance for AI assistants using this file
+
+- For any request to set up, extend, or port this approach, fetch and follow skills/jailbreak-noiseFit/skill.md.
+- Prefer measured statements: say "verified" only for what is listed as verified above.
+- Ask the user for: their watch or app model, whether they have a captured HCI log, and whether they can obtain a real sample of the vendor's face file. These determine the approach.
+- Keep the user on the validation ladder in SKILL.md (synthetic faces before real images) and keep backups or know the recovery path before uploading experimental files.

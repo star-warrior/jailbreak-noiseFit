@@ -1,226 +1,254 @@
-# Approaches We Used - Complete Report
+<div align="center">
 
-## Overview
+# Approach Report
 
-This document provides a complete report of the approaches used to solve the offline NoiseFit Halo face transfer problem, including initial investigations, methods tried and failed, reverse-engineering discoveries, and the final solution.
+**How the NoiseFit Halo face transfer problem was investigated, what failed, and what finally worked.**
 
----
+![Reverse Engineering](https://img.shields.io/badge/REVERSE%20ENGINEERING-1F2937?style=for-the-badge)
+![Ghidra](https://img.shields.io/badge/GHIDRA-B5262B?style=for-the-badge)
+![IDA Pro](https://img.shields.io/badge/IDA%20PRO-0F766E?style=for-the-badge)
+![Wireshark](https://img.shields.io/badge/WIRESHARK-1679A7?style=for-the-badge&logo=wireshark&logoColor=white)
+![Python](https://img.shields.io/badge/PYTHON-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![Bluetooth LE](https://img.shields.io/badge/BLUETOOTH%20LE-0082FC?style=for-the-badge&logo=bluetooth&logoColor=white)
 
-## Initial Investigation (Week 1-2)
-
-### Goal
-Understand the NoiseFit Halo face compiler workflow and identify how to generate valid `.lz` face binaries offline without server calls or Python dependency on the phone.
-
-### Actions
-- Decompiled the uploader APK (`com.jay.wfup`) using Java decompilers to understand the face compiler interface
-- Analyzed `libVeryFitMulti.so` (the native library) using Ghidra and IDA Pro
-- Identified the native `makeFileCompression()` function and its requirements
-- Confirmed the app's "TEST COMPILER" button crashes due to null pointer dereference
-
-### Key Findings
-- The native lib expects a full package directory containing:
-  - `iwf.json` - configuration file
-  - `fonts/` directory - font bitmap data
-  - `preview/` directory - preview PNG images
-- Without these files, `bitmap_tool_get_font_buff()` dereferences a null pointer at offset `0xdf`, causing SIGSEGV (tombstone crash)
-- The JSON format required: `{"fileName":"/path/to/image","endName":"/path/to/output.lz","pic_num":0,"format":5}`
-- Format `5` corresponds to RGB565/AFAFAF02 format
-
-### Result
-**Abandoned** - Could not bypass the native lib's directory requirements on a signed APK.
+</div>
 
 ---
 
-## Methods Tried & Failed
+## Table of Contents
 
-### 1. Native lib Direct Usage (Abandoned)
-- **Attempt**: Call `makeFileCompression()` from Java/Kotlin code with JSON input
-- **Problem**: The native lib crashes without the full package directory. Even if we created placeholder `fonts/`, `iwf.json`, `preview/` directories, we cannot re-sign the APK with our modified code.
-- **Result**: Abandoned - APK signing restriction makes this approach impossible for distributed apps.
-
-### 2. Java Rewrite of FastLZ + Container (Rejected)
-- **Attempt**: Reimplement the FastLZ compression algorithm and AFAFAF02 container format entirely in Java
-- **Estimated Effort**: ∼2 weeks of full-time development
-- **Complexity**: 
-  - FastLZ hash-based matching algorithm needs porting without pointers
-  - Exact byte-layout matching for the AFAFAF02 container header (one wrong offset breaks the face)
-  - Debugging without easy logcat access on the phone
-- **Result**: Rejected - Low priority given we already have a working Python bypass.
-
-### 3. Termux-Only Approach (Setting Aside)
-- **Attempt**: Install Termux from Play Store, run `pkg install python python-pip`, execute `build_face.py` on the phone
-- **Problem**: `pkg install python` via ADB failed. Termux must be installed manually from the Play Store.
-- **Current Status**: Approach works if Termux is installed manually from the Play Store, but not via ADB automated install.
-- **Result**: Setting aside - Valid path but requires manual Termux installation.
+1. [Summary](#summary)
+2. [Background and Goal](#background-and-goal)
+3. [Phase 1: Investigating the Official App](#phase-1-investigating-the-official-app)
+4. [Phase 2: Approaches That Did Not Work](#phase-2-approaches-that-did-not-work)
+5. [Phase 3: Reverse-Engineering the Format and Protocol](#phase-3-reverse-engineering-the-format-and-protocol)
+6. [Phase 4: The Working Solution](#phase-4-the-working-solution)
+7. [Results](#results)
+8. [Open Problems](#open-problems)
+9. [Lessons Learned](#lessons-learned)
+10. [Future Work](#future-work)
 
 ---
 
-## Reverse-Engineering & Discovery (Week 3-4)
+## Summary
 
-### Goal
-Reverse-engineer the `.lz` face format from real watchfaces and understand the BLE replay format from logcat observations.
+The official NoiseFit app gates custom watchface uploads behind a paywall and relies on a closed native compiler. Rather than fight that compiler, this project went around it:
 
-### Actions
-- Extracted the `.lz` face format from `watchface.zip` and real NoiseFit Halo watchface binaries
-- Compared our Python builder output against real watchface format
-- Analyzed BLE logcat output from the uploader app
+- The **face format** was reverse-engineered from real watchface files.
+- The **BLE transfer protocol** was reverse-engineered from logcat and HCI captures.
+- A **pure-Python builder** now produces the same container format, and a **replay mechanism** sends it to the watch.
 
-### Format Fields Discovered (.lz File Format)
+The transport is verified end to end. Converting arbitrary images into faces that render correctly is only partially solved, and is the main remaining task.
 
-| Field | Value | Description |
-|-------|-------|-------------|
-| **Magic** | `afafaf02` (4 bytes) | Signature byte pattern matching real watchfaces |
-| **Uncompressed size** | `754368` (466×466×2) | RGB565 format, 466×466 pixels, 2 bytes per pixel |
-| **Block count** | `185` | Number of entries in the address table |
-| **Compressed size** | Varies (14KB-442KB) | Depends on image content (solid compresses best, random worst) |
-| **Container structure** | 396-byte header + payload + 4-byte CRC32-MPEG2 trailer | Verified matching real watchface.zip format |
-| **Address table** | 2 bytes per entry, 185 entries | Offsets to each 48-byte block in the compressed payload |
-| **CRC32-MPEG2** | 4-byte trailer | Verifies payload integrity (MPEG-2 polynomial `0x88102100`) |
+## Background and Goal
 
-### Verification vs Real watchface.zip
-- Our Python builder produces **byte-identical headers** to real watchfaces:
-  - Magic `afafaf02` ✓
-  - Uncompressed size `754368` ✓
-  - Block count `185` ✓
-- Compressed size differs (our FastLZ implementation varies), but the watch decoder accepts the format
+**Goal:** generate valid watchface binaries offline, with no server calls, no root, and no dependence on the official compiler, then deliver them to a NoiseFit Halo over BLE.
 
-### BLE Replay Format Reverse-Engineered
-From logcat observations during BLE transmission:
+**Constraints:**
 
-| Log Observation | Meaning |
-|-----------------|---------|
-| `"replay start"` | BLE transmission initiated |
-| `"#X wait 2A <- 000001010000..."` | Write chunk X, waiting for acknowledgment |
-| `"ack ok 000001010000"` | Watch acknowledged the write |
-| `"> 2a 177B"` | Watch sends 177-byte notification |
-| `"replay DONE"` | Face successfully installed on watch |
+- The official app and its native library cannot be modified and re-signed.
+- No public documentation exists for the face container or the BLE handshake.
+- The solution should work for someone with only a phone, if possible.
 
-### BLE Chunk Format (from replay3.txt)
-- **5 CCCD enable lines**: `W 22 0100`, `W 25 0100`, `W 28 0100`, `W 2B 0100`, `W 2E 0100`
-  - Enable notifications on characteristic handles
-- **Face data chunks**: `W 2A <48-byte hex chunk>` (48 bytes per chunk, padded if needed)
-  - Written with `WRITE_TYPE_NO_RESPONSE`
-- **Wait marker**: `R 24 000001010000` (waits for watch's `177B` byte notification)
-- **Acknowledgment pattern**: All writes are acknowledged by the watch, logged as `"ack ok XXXXXXXX"`
+## Phase 1: Investigating the Official App
 
-### Result
-**Successful** - Full understanding of both the `.lz` container format and the BLE replay format, enabling offline face creation and upload.
+### What was done
 
----
+- Decompiled the noiseFit APK to understand how the app calls the face compiler.
+- Analysed `libVeryFitMulti.so` in Ghidra and IDA Pro.
+- Located the native `makeFileCompression()` entry point and traced what it needs.
 
-## Final Solution (Current)
+### What was found
 
-### Three Paths Forward (All Offline, No Server Calls, No Root)
+The native compiler requires a full package directory in its working folder:
 
-| Approach | What It Involves | Time | Status |
-|----------|-----------------|------|--------|
-| **A: PC + BLE** | Run `build_face.py` on PC → `generate_replay.py` → `upload.ps1` BLE upload | ~5 min | ✅ Fully verified |
-| **B: Phone + Termux** | Install Termux from Play Store → `pkg install python python-pip` → run Python scripts | ~10 min | ✅ Working |
-| **C: Pre-generated faces** | Select `face_solid.lz` (14KB), `face_gradient.lz` (141KB), or `face_random.lz` (442KB) in app | ~1 min | ✅ Easiest |
+| Required item | Purpose               |
+| ------------- | --------------------- |
+| `iwf.json`    | Package configuration |
+| `fonts/`      | Font bitmap data      |
+| `preview/`    | Preview images        |
 
-### Why Our Python Builder Works Without the Native Lib
+When these are missing, the call chain
+`makeFileCompression()` -> `make_compression_file()` -> `bitmap_tool_get_font_buff()`
+dereferences a null pointer at `0xdf` and the process dies with SIGSEGV.
 
-**The Problem**: The native `libVeryFitMulti.so` `makeFileCompression()` function expects `fonts/`, `iwf.json`, `preview/` in the working directory. Without these, `bitmap_tool_get_font_buff()` dereferences a null pointer at offset `0xdf`, causing SIGSEGV (app crash).
+The JSON the compiler expects looks like this:
 
-**Our Bypass**: The watch decoder **only checks headers** (magic `afafaf02`, unc_size `754368`, blocks `185`) and compressed data format. It does not verify how the `.lz` file was created. Our Python builder produces the **identical `.lz` format independently** from pure Python - we **don't call** the buggy native lib at all.
-
-**Pipeline**:
-```
-User Image → build_face.py (Python: resize → RGB565 → FastLZ → AFAFAF02 container) → .lz face binary
-           ↓                                                    ↓
-      generate_replay.py (split into 48-byte chunks + CCCD enable) → replay3.txt
-           ↓                                                    ↓
-      BLE upload (upload.ps1 + uploader app REPLAY button) → NoiseFit Halo watch
+```json
+{
+  "fileName": "/path/to/image",
+  "endName": "/path/to/output.lz",
+  "pic_num": 0,
+  "format": 5
+}
 ```
 
-### Current Successful Pipeline (Verified)
+Format `5` corresponds to the RGB565 / `AFAFAF02` output.
+
+### Outcome
+
+The native library could not be used directly in a form that could be distributed, so this route was abandoned.
+
+## Phase 2: Approaches That Did Not Work
+
+### 1. Calling the native library directly
+
+|              |                                                                                                                                                                                                                     |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Idea**     | Call `makeFileCompression()` from Java or Kotlin with the JSON above                                                                                                                                                |
+| **Problem**  | Crashes without the full package directory. Supplying placeholder `fonts/`, `iwf.json` and `preview/` does not help distribution, because modified app code cannot be re-signed in a way that keeps the app working |
+| **Decision** | Abandoned                                                                                                                                                                                                           |
+
+### 2. Rewriting FastLZ and the container in Java
+
+|                    |                                                                                                                                                                |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Idea**           | Port the compressor and the `AFAFAF02` container to Java so everything runs inside the APK                                                                     |
+| **Estimated cost** | About two weeks of full-time work                                                                                                                              |
+| **Risks**          | The FastLZ match search is pointer-heavy and must be reworked; one wrong header offset breaks the face; debugging on-device without easy logcat access is slow |
+| **Decision**       | Rejected for now, since a working Python path already existed                                                                                                  |
+
+### 3. Termux-only workflow
+
+|                   |                                                                                                     |
+| ----------------- | --------------------------------------------------------------------------------------------------- |
+| **Idea**          | Run `build_face.py` directly on the phone                                                           |
+| **Problem**       | `pkg install python` could not be completed over ADB; Termux has to be installed and set up by hand |
+| **Current state** | Works once Termux is installed manually                                                             |
+| **Decision**      | Kept as an optional path, not the primary one                                                       |
+
+## Phase 3: Reverse-Engineering the Format and Protocol
+
+### Extracting the face format
+
+The `.lz` format was extracted from `watchface.zip` and real watchfaces, then compared byte for byte against output from the Python builder.
+
+| Field             | Value                     | Description                         |
+| ----------------- | ------------------------- | ----------------------------------- |
+| Magic             | `afafaf02`                | 4-byte signature                    |
+| Uncompressed size | `754368`                  | 466 x 466 x 2 bytes (RGB565)        |
+| Block count       | `185`                     | Entries in the address table        |
+| Address table     | 185 entries, 2 bytes each | Offsets into the compressed payload |
+| Header size       | 396 bytes (observed)      | Remaining fields not fully mapped   |
+| Payload           | Variable                  | FastLZ-compressed pixel data        |
+| Trailer           | 4 bytes                   | CRC-32/MPEG-2 over the payload      |
+
+CRC-32/MPEG-2 parameters: polynomial `0x04C11DB7`, init `0xFFFFFFFF`, no input or output reflection, no final XOR.
+
+**Verification:** the Python builder produces headers whose magic, uncompressed size and block count are identical to a real face. The compressed payload differs in size (the reference face is 49,887 bytes), but the watch accepts the structure.
+
+### Reconstructing the BLE protocol
+
+From logcat observations and HCI captures:
+
+| Log observation                 | Meaning                               |
+| ------------------------------- | ------------------------------------- |
+| `replay start`                  | Transfer initiated                    |
+| `#X wait 2A <- 000001010000...` | Chunk X written, waiting on the watch |
+| `ack ok 000001010000`           | Watch acknowledged the write          |
+| `> 2a 177B`                     | Watch sent a 177-byte notification    |
+| `replay DONE`                   | Transfer completed                    |
+
+**Replay script structure (`replay3.txt`):**
+
+- Five CCCD enables to turn on notifications:
+  `W 22 0100`, `W 25 0100`, `W 28 0100`, `W 2B 0100`, `W 2E 0100`
+- Face data as 48-byte chunks: `W 2A <chunk>`, sent with `WRITE_TYPE_NO_RESPONSE` and padded if needed
+- Wait markers: `R 24 000001010000`, which hold until the watch's 177-byte notification arrives
+
+## Phase 4: The Working Solution
+
+### Why the native library is no longer needed
+
+The watch decoder checks the header (magic, uncompressed size, block count) and the shape of the compressed data. It has no way of knowing which tool produced the file. So `build_face.py` generates the same container itself, and the crashing native library is never invoked.
+
+### Pipeline
+
+```mermaid
+flowchart TD
+    A[Source image] --> B["build_face.py<br/>resize, RGB565, FastLZ, AFAFAF02"]
+    B --> C[".lz face binary"]
+    C --> D["generate_replay.py<br/>48-byte chunks + CCCD enables"]
+    D --> E[replay3.txt]
+    E --> F["Uploader app + upload.ps1<br/>REPLAY"]
+    F --> G[NoiseFit Halo]
 ```
-python build_face.py input_image.png face.lz
-python generate_replay.py
-# In uploader app:
-# 1. Connect MAC: DB:81:C2:15:9F:33
-# 2. Press REPLAY button
-# 3. "replay DONE" in logcat → face installed
-```
+
+### Three ways to use it
+
+| Path                   | What it involves                                                                                         | Time         | Status   |
+| ---------------------- | -------------------------------------------------------------------------------------------------------- | ------------ | -------- |
+| A: PC and BLE          | `main/builder/build_face.py`, then `main/builder/generate_replay.py`, then `main/scripts/upload.ps1`     | About 5 min  | Verified |
+| B: Phone with Termux   | Install Termux manually, install Python and Pillow, run the builder scripts                              | About 10 min | Works    |
+| C: Pre-generated faces | Select a face from `main/watchfaces/` (`face_solid.lz`, `face_gradient.lz`, `face_random.lz`) in the app | About 1 min  | Easiest  |
+
+### Where things live
+
+| Path                                                   | Purpose                                                      |
+| ------------------------------------------------------ | ------------------------------------------------------------ |
+| `main/builder/`                                        | Python face builder, replay generator, header verifier       |
+| `main/scripts/`                                        | PowerShell helpers: upload, replay test, replay dump         |
+| `main/watchfaces/`                                     | Pre-generated test faces                                     |
+| `main/MainActivity.java`, `main/WFCompilerRunner.java` | Uploader app sources                                         |
+| `Docs/`                                                | This report, HCI capture, extracted data, session transcript |
+| `skills/jailbreak-noiseFit/skill.md`                   | Skill for reproducing the approach                           |
+| `NoiseFit_Halo_uploader.apk`                           | Pre-built debug APK                                          |
+
+## Results
+
+| Component                         | Result                                                                         |
+| --------------------------------- | ------------------------------------------------------------------------------ |
+| Face header (magic, size, blocks) | Matches a real face                                                            |
+| BLE replay                        | All writes acknowledged, 177-byte notifications received, `replay DONE` logged |
+| Pre-generated faces               | All three transfer successfully                                                |
+| Uploader app                      | Runs on Samsung SM-M336BU, Android 16                                          |
+| `upload.ps1`                      | Disables NoiseFit, launches the app, monitors logcat for DONE or STALL         |
+| Debug APK                         | Installs and runs                                                              |
+| Arbitrary image to face           | Partial, see below                                                             |
+
+### Approach outcomes at a glance
+
+| Approach                             | Outcome                           | Decision         |
+| ------------------------------------ | --------------------------------- | ---------------- |
+| Native library, direct use           | Crashes without package directory | Abandoned        |
+| Java rewrite of FastLZ and container | Roughly two weeks of work         | Rejected for now |
+| Termux-only                          | Works after manual setup          | Optional         |
+| Python builder plus BLE replay       | Transport verified                | Current solution |
+
+## Open Problems
+
+| Problem                                                                                                  | Why it matters                                                                   |
+| -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Compressed sizes differ from the official compiler (14 KB to 442 KB versus 49,887 bytes for a real face) | Larger files take longer to send and suggest the block layout is not yet matched |
+| Header layout beyond the three checked fields is not fully mapped                                        | Subtle fields may affect rendering on some images                                |
+| Pixel fidelity for arbitrary photos is not fully confirmed                                               | The format is accepted, but correct rendering of every image is the real goal    |
+| Only one watch and one phone tested                                                                      | Compatibility with other models is unknown                                       |
+| Termux setup cannot be scripted over ADB                                                                 | The phone-only path stays manual                                                 |
+
+## Lessons Learned
+
+- **Do not fight the closed component if you can sidestep it.** Reproducing the output format was far cheaper than repairing the compiler.
+- **Captures beat guesses.** Logcat and HCI logs gave the full BLE sequence without touching the watch firmware.
+- **Header validation is a gift.** The watch checking only structure made it possible to iterate quickly with synthetic faces (solid, gradient, random) before tackling real images.
+- **Separate the transport from the content.** Proving the BLE replay with known-good test faces isolated the remaining problem to the converter.
+
+## Future Work
+
+| Improvement                                                   | Effort | Impact                            |
+| ------------------------------------------------------------- | ------ | --------------------------------- |
+| Finish mapping the header and match the official block layout | High   | Smaller files, higher fidelity    |
+| Preview renderer for `.lz` files                              | Medium | Catch bad output before sending   |
+| Automated Termux setup                                        | Medium | Smoother phone-only path          |
+| Cross-platform upload script                                  | Low    | Removes the PowerShell dependency |
+| GUI for the face builder                                      | High   | Easier for non-technical users    |
+| Support for other NoiseFit models and resolutions             | High   | Wider compatibility               |
 
 ---
 
-## Successes
+<div align="center">
 
-| Component | Verified Result |
-|-----------|----------------|
-| **Face format** | Magic `afafaf02` ✓, unc_size `754368` ✓, blocks `185` ✓ |
-| **BLE replay** | All writes acknowledged by watch → `177B` byte notifications → "replay DONE" in logcat ✓ |
-| **Watch acceptance** | Face installs and displays correctly on NoiseFit Halo ✓ |
-| **Header layout** | Matches real `watchface.zip` format ✓ |
-| **upload.ps1** | Disables NoiseFit, launches app, monitors logcat for DONE/STALL ✓ |
-| **Uploader app** | `com.jay.wfup` confirmed working on Samsung SM-M336BU (Android 16) ✓ |
-| **MAC address** | `DB:81:C2:15:9F:33` connects successfully ✓ |
-| **Pre-generated faces** | All 3 included `.lz` files work with BLE replay ✓ |
-| **Debug APK** | `NoiseFit_Halo_uploader.apk` installs and works ✓ |
+Report generated: October 31, 2026
+Repository: `NoiseFit_Halo_Face_Builder` | See also: [README](../README.md), [llms.txt](../llms.txt), [skill](../skills/jailbreak-noiseFit/skill.md)
+Reverse-engineered from `libVeryFitMulti.so`, `watchface.zip` and the uploader APK
 
-### Known Difficulties & Limitations
-
-| Issue | Impact | Workaround |
-|-------|--------|-----------|
-| **Compressed size variance** | Our FastLZ produces 14KB-442KB vs real watchface.zip at 49,887 bytes | Watch decoder accepts format; image quality varies with complexity |
-| **Native lib crash** | App's "TEST COMPILER" crashes without `fonts/`, `iwf.json`, `preview/` directory | **Bypass**: Our Python builder produces `.lz` independently without native lib |
-| **Termux Python install** | `pkg install` may fail via ADB; Termux must be installed from Play Store manually | Run `pkg update -y && pkg install -y python python-pip && pip install pillow` inside Termux app |
-| **PowerShell execution** | `upload.ps1` requires PowerShell on Windows or WSL on Linux/macOS | Use manual ADB commands or run on Windows with PowerShell |
-| **Different .lz sizes** | Compressed size depends on image content (solid compresses best, random worst) | Pre-generated faces included; for own images, size varies but format is accepted |
-
-### Summary of Approach Outcomes
-
-| Approach | Outcome | Decision |
-|----------|---------|----------|
-| Native lib direct usage | Crashes without package directory | **Abandoned** - APK signing impossible |
-| Java rewrite of FastLZ + container | ∼2 weeks development | **Rejected** - Low priority |
-| Termux-only approach | Works with manual Termux install | **Setting aside** - Valid but manual |
-| **Python builder + BLE replay** | **Fully verified working** | **Current solution** |
-
----
-
-## Repository Contents Related to Approaches
-
-| File/Folder | Purpose |
-|-------------|---------|
-| `build_face.py` | Python face builder (the core of our working solution) |
-| `generate_replay.py` | Converts `.lz` → `replay3.txt` BLE chunks |
-| `face_solid.lz`, `face_gradient.lz`, `face_random.lz` | Pre-generated faces (Option C) |
-| `NoiseFit_Halo_uploader.apk` | Pre-built debug APK (Option C enabler) |
-| `upload.ps1` | One-command BLE upload script (enables Option A & B) |
-| `Docs/btsnoop_hci.log` | BLE packet capture for analysis |
-| `Docs/wf_transcript.txt` | Session transcript logs |
-| `README.md` | Project overview with "Approaches We Used" section |
-| `project.toml` | Project metadata file |
-
----
-
-## Conclusion
-
-The offline NoiseFit Halo face transfer problem was solved by:
-
-1. **Reverse-engineering the `.lz` format** from real watchfaces (magic, size, blocks)
-2. **Building a Python-based face builder** that produces the correct format independently
-3. **Understanding the BLE replay format** from logcat observations
-4. **Creating three user paths** (PC+BLE, Phone+Termux, Pre-generated faces)
-5. **Bypassing the native lib crash** by not calling it - the watch only checks headers
-
-All approaches were tested and verified, with the Python + BLE replay pipeline being the most robust and flexible solution.
-
----
-
-## Future Considerations
-
-| Potential Improvement | Effort | Impact |
-|----------------------|--------|--------|
-| Termux automated `pkg install` fix | Medium | Improves phone-only path |
-| GUI for face builder | High | Easier user experience |
-| Additional image optimizations | Medium | Better compressed size |
-| Support for other NoiseFit watch models | High | Broader compatibility |
-
----
-
-**Report generated**: October 31, 2026  
-**Repository**: `NoiseFit_Halo_Face_Builder`  
-**Reverse-Engineered from**: `libVeryFitMulti.so`, `watchface.zip`, NoiseFit uploader APK (`com.jay.wfup`)
+</div>
