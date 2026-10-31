@@ -1,0 +1,56 @@
+[project]
+name = "NoiseFit-Halo-Face-Builder"
+description = "Offline pipeline to convert photos → RGB565 → FastLZ → AFAFAF02 container → BLE upload to NoiseFit Halo watch. No server calls, no root, no Python dependency on phone (PC path)."
+version = "2.0.0"
+license = "MIT"
+repository = "https://github.com/jay/NoiseFit-Halo-Face-Builder"
+
+[metadata]
+author = "Jay"
+keywords = ["noisefit", "halo", "watchface", "ble", "offline", "python", "fastlz"]
+categories = ["utilities", "wearables", "bluetooth"]
+
+[build]
+script = "build_face.py"
+description = "Main face builder: Photo → RGB565 → FastLZ → AFAFAF02 .lz container"
+
+[tools]
+python = { version = ">=3.8", description = "Required for build_face.py" }
+pip = { version = ">=21.0", description = "Required: pip install pillow" }
+
+[scripts]
+build_face = "python build_face.py <input> <output.lz>"
+generate_replay = "python generate_replay.py"
+verify_build = "python verify_build.py"
+upload_watch = ".\\upload.ps1"
+install_app = "adb install NoiseFit_Halo_uploader.apk"
+
+[dependencies]
+pillow = { version = ">=10.0.0", description = "Pillow for image processing (RGB565 conversion)" }
+fastlz = { version = "*", description = "FastLZ algorithm ported from fastlz.c" }
+
+[features]
+pre-generated-faces = true
+description = "Includes face_solid.lz, face_gradient.lz, face_random.lz"
+
+[ble]
+watch_mac = "DB:81:C2:15:9F:33"
+uuid_data_char = "16186F04-0000-1000-8000-00807F9B34FB"
+uuid_cccd = "00002902-0000-1000-8000-00805F9B34FB"
+chunk_size = 48
+notification_size = 177
+
+[quickstart]
+option_a = "APK + pre-generated faces (2 min)"
+option_b = "PC + build_face.py + generate_replay.py + upload.ps1 (5 min)"
+option_c = "Phone + Termux + Python scripts (10 min)"
+
+[supported-os]
+windows = true
+linux = true
+macos = true
+android-studio = true
+
+[issues]
+tracker = "https://github.com/jay/NoiseFit-Halo-Face-Builder/issues"
+documentation = "https://github.com/jay/NoiseFit-Halo-Face-Builder/wiki"
