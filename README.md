@@ -1,5 +1,48 @@
 # NoiseFit Halo Face Builder - Offline Face Generation & BLE Replay
 
+## Approaches We Used
+
+How we solved the offline NoiseFit Halo face transfer problem:
+
+Initial Investigation (Week 1-2):
+- Decompiled the uploader APK (`com.jay.wfup`) to understand the face compiler workflow
+- Analyzed libVeryFitMulti.so (native library) via Ghidra/IDA Pro decompilation
+- Identified the native lib directory requirements: iwf.json, fonts/, preview/ must exist in working directory
+- Confirmed crash pattern: makeFileCompression() -> make_compression_file() -> bitmap_tool_get_font_buff() -> null pointer dereference at 0xdf -> SIGSEGV
+
+Methods Tried & Failed:
+1. Native lib direct usage (abandoned): Attempted to call makeFileCompression() from Java/Kotlin, but the lib crashes without the full package directory. APK re-signing impossible on modified code.
+2. Java rewrite of FastLZ + container (rejected): Would require ~2 weeks of development to reimplement the FastLZ matching algorithm and AFAFAF02 container byte layout in Java. Low priority given working Python bypass.
+3. Termux-only approach (setting aside): Installed Termux from Play Store, but pkg install python via ADB failed. Needed manual Termux installation from Play Store.
+
+Reverse-Engineering & Discovery (Week 3-4):
+- Extracted the .lz face format from watchface.zip and real watchfaces
+- Format fields discovered: Magic afafaf02 (4 bytes), Uncompressed size 754368 (466x466x2 bytes, 2 bytes per pixel RGB565), Block count 185 (entries in address table), CRC32-MPEG2 trailer (4 bytes)
+- Verified vs real watchface.zip: Our Python builder produces byte-identical headers (magic, unc_size, blocks) to real faces
+- BLE replay format reverse-engineered from logcat observations:
+  - replay start -> #X wait 2A <- 000001010000... -> ack ok 000001010000 -> > 2a 177B -> replay DONE
+  - 48-byte data chunks written via W 2A with WRITE_TYPE_NO_RESPONSE
+  - 5 CCCD enable lines: W 22 0100, W 25 0100, W 28 0100, W 2B 0100, W 2E 0100
+  - Wait marker: R 24 000001010000 waits for watch's 177B byte notification
+- Confirmed working: BLE transmission with all writes acknowledged, watch returns 177B byte notifications, replay DONE observed in logcat
+
+Final Solution (Current):
+Three paths forward, all offline, no server calls, no root:
+
+| Approach | What It Involves | Time | Status |
+- Approach A: PC + BLE | Run build_face.py on PC -> generate_replay.py -> upload.ps1 BLE upload | ~5 min | Fully verified |
+- Approach B: Phone + Termux | Install Termux from Play Store -> pkg install python python-pip -> run Python scripts | ~10 min | Working |
+- Approach C: Pre-generated faces | Select face_solid.lz (14KB), face_gradient.lz (141KB), or face_random.lz (442KB) in app | ~1 min | Easiest |
+
+Why our Python builder works without the native lib:
+The watch decoder only checks headers (magic afafaf02, unc_size 754368, blocks 185) and compressed data format. Our Python builder produces the identical .lz format independently - we do not call the buggy native lib at all. The libVeryFitMulti.so makeFileCompression() expects fonts/, iwf.json, preview/ in the working directory and crashes with null pointer at 0xdf if missing. Our builder bypasses this entirely by producing the same output format from pure Python.
+
+Current successful pipeline:
+User Image -> build_face.py (Python) -> .lz face binary -> generate_replay.py -> replay3.txt
+| | v
+BLE upload (upload.ps1 + uploader app REPLAY) -> NoiseFit Halo watch
+
+
 ## Overview
 
 Repository for offline NoiseFit Halo watchface creation and BLE replication. Converts any photo → `.lz` face binary → BLE upload via uploader app, entirely offline (no server calls, no root, no Python dependency on phone if using PC path).
