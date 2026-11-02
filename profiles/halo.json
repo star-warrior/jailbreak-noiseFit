@@ -1,0 +1,176 @@
+{
+  "model": "NoiseFit Halo",
+  "profile_version": 2,
+  "profile_status": "transport-verified, container-verified, layout-verified, rendering-verified-with-open-cell-background",
+  "notes": "Verified on one Halo and one Android phone. Values here are measured, not copied. Any other NoiseFit model must be re-measured with its own capture.",
+
+  "display": {
+    "width": 466,
+    "height": 466,
+    "shape": "round",
+    "pixel_format": "RGB565",
+    "bytes_per_pixel": 2,
+    "byte_order": "big-endian",
+    "status": {
+      "width": "verified",
+      "height": "verified",
+      "shape": "verified",
+      "pixel_format": "verified",
+      "byte_order": "verified"
+    }
+  },
+
+  "container": {
+    "magic": "afafaf02",
+    "uncompressed_size": 754368,
+    "block_count": 185,
+    "block_bytes": 4096,
+    "header_size_formula": "26 + 2 * block_count",
+    "header_size_reference": 396,
+    "block_table_entry": "u16le, 0x8000 | compressed_size",
+    "compression": "LZO1X",
+    "checksums": {
+      "field_8": "vendor checksum of the uncompressed blob",
+      "field_16": "vendor checksum of the compressed payload",
+      "algorithm": "table-driven, 256-entry vendor S-box, table[0] == 0x60454269, seed 0xFFFFFFFF, final complement, little endian",
+      "implementation": "android/app/src/main/java/com/jay/wfup/LzoCrc32.java"
+    },
+    "status": {
+      "magic": "verified",
+      "uncompressed_size": "verified",
+      "block_count": "verified",
+      "header_size_formula": "verified",
+      "compression": "verified",
+      "checksums": "verified"
+    }
+  },
+
+  "transfer": {
+    "prefix": "00 10 + 16 zero bytes + container length u32le",
+    "prefix_bytes": 22,
+    "tail": "crc32(prefix || container) little endian, zlib polynomial 0xEDB88320",
+    "piece_count": "ceil((container_length + 26) / 3846)",
+    "status": {
+      "prefix": "verified",
+      "tail": "verified",
+      "piece_count": "verified"
+    }
+  },
+
+  "ble": {
+    "service_uuid": "16186F00-0000-1000-8000-00807F9B34FB",
+    "uuid_pattern": "16186Fxx-0000-1000-8000-00807F9B34FB",
+    "data_handle": "0x2A",
+    "data_uuid": "16186F04-0000-1000-8000-00807F9B34FB",
+    "command_handle_a": "0x21",
+    "command_uuid_a": "16186F01-0000-1000-8000-00807F9B34FB",
+    "command_handle_b": "0x24",
+    "command_uuid_b": "16186F02-0000-1000-8000-00807F9B34FB",
+    "cccd_handles": ["0x22", "0x25", "0x28", "0x2B", "0x2E"],
+    "write_type": "NO_RESPONSE",
+    "mtu_request": 247,
+    "chunk_bytes": 177,
+    "max_chunks_per_window": 22,
+    "window_marker": "00 00 00 00 <chunk_count u16le>",
+    "chunk_header": "<seq u16le> 0E 00 <win_index u16le> <12-byte field> [10-byte meta]",
+    "window_1_payload_bytes": 3824,
+    "later_window_payload_bytes": 3846,
+    "flow_control": {
+      "after_marker": "00 00 01 01 00 00",
+      "after_last_chunk": "00 00 01 00 00 00",
+      "rejection_pattern": "00 00 01 02 00 00"
+    },
+    "command_session": {
+      "start": "00 00 00 00 01 00",
+      "go_ahead": "00 00 01 01 00 00",
+      "face_transfer_body": "53 3A 0D 22 0B 0A 03 39 31 36 10 32 18 32 20 01",
+      "face_id": "916",
+      "reply_body": "53 3A 04 2A 02 08 00",
+      "required": true
+    },
+    "status": {
+      "data_handle": "verified",
+      "command_handles": "verified",
+      "cccd_handles": "verified",
+      "mtu_request": "verified",
+      "chunk_bytes": "verified",
+      "window_marker": "verified",
+      "flow_control": "verified",
+      "command_session": "verified"
+    }
+  },
+
+  "blob_layout": {
+    "total_bytes": 754368,
+    "config_header": {
+      "range": [0, 514],
+      "widget_table_offset": "0x0180",
+      "widget_record_bytes": 13,
+      "widget_record": "u16 x, u16 y, u16 w, u16 h, u8 kind, u32 sheet_offset",
+      "kind_map": { "1": "colon", "4": "date", "10": "digit" },
+      "status": "partially-verified"
+    },
+    "preview": {
+      "range": [514, 192714],
+      "width": 310,
+      "height": 310,
+      "role": "face-list thumbnail only",
+      "status": "verified"
+    },
+    "mid_block": {
+      "range": [192714, 320056],
+      "width": 466,
+      "height": 136,
+      "tail_bytes": 590,
+      "direction": "top",
+      "status": "verified"
+    },
+    "artwork": {
+      "range": [320056, 627616],
+      "width": 466,
+      "height": 330,
+      "direction": "bottom",
+      "status": "verified"
+    },
+    "glyph_atlas": {
+      "range_start": 627616,
+      "range_end": 754368,
+      "content": "date cells, digit cells, colon cells, AM/PM",
+      "cell_format": "packed RGB565, w*h*2 per digit",
+      "colour": "baked into sheet",
+      "background": "opaque black",
+      "status": "verified-structure, open-background"
+    },
+    "screen_composition": {
+      "rows_0_135": "mid block",
+      "rows_136_465": "artwork",
+      "sprite_placement": "blitted on top by firmware",
+      "full_bleed_split_row": 136
+    }
+  },
+
+  "verified_widget_table_face_a": [
+    { "x": 204, "y": 23, "w": 60, "h": 30, "kind": "date", "sheet_offset": 627648, "sheet_bytes": 14400 },
+    { "x": 86, "y": 69, "w": 60, "h": 90, "kind": "digit", "sheet_offset": 642048, "sheet_bytes": 108000 },
+    { "x": 154, "y": 69, "w": 60, "h": 90, "kind": "digit", "sheet_offset": 642048, "sheet_bytes": 108000 },
+    { "x": 222, "y": 69, "w": 24, "h": 90, "kind": "colon", "sheet_offset": 750048, "sheet_bytes": 4320 },
+    { "x": 254, "y": 69, "w": 60, "h": 90, "kind": "digit", "sheet_offset": 642048, "sheet_bytes": 108000 },
+    { "x": 322, "y": 69, "w": 60, "h": 90, "kind": "digit", "sheet_offset": 642048, "sheet_bytes": 108000 }
+  ],
+
+  "evidence": {
+    "capture": "Docs/btsnoop_hci.log",
+    "transcript": "Docs/wf_transcript.txt",
+    "reference_blob": "android/app/src/main/assets/blob.bin",
+    "reference_blob_bytes": 754368,
+    "protocol": "Docs/PROTOCOL.md",
+    "report": "Docs/TECHNICAL_REPORT.md"
+  },
+
+  "open_issues": [
+    "glyph cells store an opaque black backing, visible as boxes over a photo",
+    "widget record fields beyond x/y/w/h/kind/sheet are unmapped",
+    "metadata widgets (steps/day/battery) require a larger atlas",
+    "no other NoiseFit model has been tested"
+  ]
+}

@@ -1,56 +1,77 @@
 [project]
 name = "NoiseFit-Halo-Face-Builder"
-description = "Offline pipeline to convert photos → RGB565 → FastLZ → AFAFAF02 container → BLE upload to NoiseFit Halo watch. No server calls, no root, no Python dependency on phone (PC path)."
-version = "2.0.0"
+description = "Offline pipeline that turns a photo into a native NoiseFit Halo watch face (afafaf02 container, 466x466 RGB565 big-endian, LZO1X per 4096-byte block) and installs it over Bluetooth LE. No server, no account, no root."
+version = "2.1.0"
 license = "MIT"
 repository = "https://github.com/star-warrior/jailbreak-noiseFit"
+protocol_reference = "https://github.com/star-warrior/jailbreak/blob/main/PROTOCOL.md"
 
 [metadata]
 author = "Jay"
-keywords = ["noisefit", "halo", "watchface", "ble", "offline", "python", "fastlz"]
+keywords = ["noisefit", "halo", "watchface", "ble", "offline", "android", "lzo1x", "rgb565", "reverse-engineering"]
 categories = ["utilities", "wearables", "bluetooth"]
 
 [build]
-script = "build_face.py"
-description = "Main face builder: Photo → RGB565 → FastLZ → AFAFAF02 .lz container"
+android = "android/"
+description = "Android app (Java, no dependencies): crop, build, self-check, upload."
+pc_reference = "builder/"
+pc_description = "Python reference implementation of the same container format."
 
 [tools]
-python = { version = ">=3.8", description = "Required for build_face.py" }
-pip = { version = ">=21.0", description = "Required: pip install pillow" }
+jdk = { version = "17", description = "Required for AGP 8.7" }
+android_sdk = { version = "34", description = "Compile and target SDK" }
+gradle = { version = ">=8.7", description = "No wrapper is checked in" }
+python = { version = ">=3.9", description = "Optional PC reference tools" }
+pillow = { version = ">=10.0", description = "pip install pillow (PC tools only)" }
 
 [scripts]
-build_face = "python build_face.py <input> <output.lz>"
-generate_replay = "python generate_replay.py"
-verify_build = "python verify_build.py"
-upload_watch = ".\\upload.ps1"
-install_app = "adb install NoiseFit_Halo_uploader.apk"
+android_build = "cd android && gradle assembleDebug --no-daemon"
+android_install = "adb install -r android/app/build/outputs/apk/debug/app-debug.apk"
+build_face = "python builder/build_face.py <input> <output.lz>"
+verify_build = "python builder/verify_build.py <face.lz>"
+generate_replay = "python builder/generate_replay.py <face.lz> android/app/src/main/assets/replay3.txt"
+upload_watch = ".\\scripts\\upload.ps1"
 
-[dependencies]
-pillow = { version = ">=10.0.0", description = "Pillow for image processing (RGB565 conversion)" }
-fastlz = { version = "*", description = "FastLZ algorithm ported from fastlz.c" }
-
-[features]
-pre-generated-faces = true
-description = "Includes face_solid.lz, face_gradient.lz, face_random.lz"
+[device]
+model = "NoiseFit Halo"
+display = "466x466 round"
+container_magic = "afafaf02"
+compression = "LZO1X, 4096-byte blocks"
+pixel_format = "RGB565 big-endian"
+uncompressed_size = 754368
+profile = "profiles/halo.json"
 
 [ble]
-watch_mac = "DB:81:C2:15:9F:33"
-uuid_data_char = "16186F04-0000-1000-8000-00807F9B34FB"
-uuid_cccd = "00002902-0000-1000-8000-00805F9B34FB"
-chunk_size = 48
-notification_size = 177
+service_uuid = "16186F00-0000-1000-8000-00807F9B34FB"
+data_uuid = "16186F04-0000-1000-8000-00807F9B34FB"
+command_uuid_a = "16186F01-0000-1000-8000-00807F9B34FB"
+command_uuid_b = "16186F02-0000-1000-8000-00807F9B34FB"
+chunk_bytes = 177
+max_chunks_per_window = 22
+mtu_request = 247
+flow_control_after_marker = "000001010000"
+flow_control_after_last_chunk = "000001000000"
 
-[quickstart]
-option_a = "APK + pre-generated faces (2 min)"
-option_b = "PC + build_face.py + generate_replay.py + upload.ps1 (5 min)"
-option_c = "Phone + Termux + Python scripts (10 min)"
+[features]
+crop_dialog = true
+on_device_build = true
+self_check_before_upload = true
+pre_generated_faces = ["watchfaces/face_solid.lz", "watchfaces/face_gradient.lz", "watchfaces/face_random.lz"]
+
+[status]
+transport = "verified"
+container = "verified"
+blob_layout = "verified"
+photo_rendering = "verified"
+clock_cell_backgrounds = "open"
+metadata_widgets = "open"
+other_models = "untested"
 
 [supported-os]
 windows = true
 linux = true
 macos = true
-android-studio = true
+android = true
 
 [issues]
 tracker = "https://github.com/star-warrior/jailbreak-noiseFit/issues"
-documentation = "https://github.com/star-warrior/jailbreak-noiseFit/wiki"

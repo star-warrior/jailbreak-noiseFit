@@ -1,9 +1,18 @@
 ---
 name: jailbreak-noisefit
-description: Use this skill when a user wants to upload custom watchfaces to any NoiseFit smartwatch (Halo is the verified reference model; other editions are supported through per-model profiles) without the companion app's paywalled flow. Also use it to set up the NoiseFit Face Builder repo, or to reproduce the approach for another smartwatch or app, meaning capturing and reverse-engineering the BLE face-transfer protocol, discovering a model's face container and display parameters, building a face converter (image to vendor binary), and writing an Android uploader that replays the transfer offline. Covers tooling, BLE capture and analysis, per-model profile creation, FastLZ and RGB565 handling, CRC checks, the uploader app, a validation ladder, pitfalls, and safety boundaries. Trigger on mentions of NoiseFit, any Noise watch model, Veryfit, watchface upload, custom dial, BLE replay, btsnoop, HCI snoop, GATT write replay, AFAFAF02, or bypassing a companion-app paywall for the user's own device.
+description: Use this skill when a user wants to upload custom watchfaces to any NoiseFit smartwatch (Halo is the verified reference model; other editions are supported through per-model profiles) without the companion app's paywalled flow. Also use it to set up the NoiseFit Face Builder repo, or to reproduce the approach for another smartwatch or app, meaning capturing and reverse-engineering the BLE face-transfer protocol, discovering a model's face container and display parameters, building a face converter (image to vendor binary), and writing an Android uploader that replays the transfer offline. Covers tooling, BLE capture and analysis, per-model profile creation, LZO1X and RGB565 handling, checksums, the uploader app, a validation ladder, pitfalls, and safety boundaries. Trigger on mentions of NoiseFit, any Noise watch model, Veryfit, watchface upload, custom dial, BLE replay, btsnoop, HCI snoop, GATT write replay, AFAFAF02, or bypassing a companion-app paywall for the user's own device.
 ---
 
 # BLE Watchface Uploader: Reverse-Engineer, Build, and Replay
+
+> **Solved-format notice.** The Halo container and framing are no longer guesses.
+> The authoritative values are in [`Docs/PROTOCOL.md`](../../Docs/PROTOCOL.md):
+> LZO1X per 4096-byte block, a dynamic `26 + 2n` header, two vendor checksums, a
+> solved `CRC32(prefix22 || container)` trailer, and windowed framing of 177-byte
+> writes with a 6-byte marker per window. Anything below that still sounds generic
+> (FastLZ, 48-byte chunks, an unexplained CRC) is early reverse-engineering
+> guidance, kept because the *method* still applies to a new model. Trust
+> `Docs/PROTOCOL.md` and `profiles/halo.json` for the Halo.
 
 Reference repository: https://github.com/star-warrior/jailbreak-noiseFit
 
@@ -33,7 +42,7 @@ Say plainly that the project is unaffiliated with the vendor and that terms of s
 
 ### Honesty about status
 
-For the NoiseFit Halo: the BLE transport is verified, the container header is verified, and arbitrary image conversion is only partial.
+For the NoiseFit Halo: the BLE transport, command session, container format, blob layout, pixel byte order, full-bleed geometry and photo rendering are verified on hardware, with a live clock. One cosmetic issue is open: the glyph cells carry an opaque black background that shows as boxes over a photo. Widget record fields beyond `x/y/w/h/kind/sheet` are unmapped, and metadata widgets (steps/day/battery) are not solved.
 
 For every other NoiseFit model: nothing is verified. Treat Halo values as hypotheses to test, never as facts. Never present a converter as complete for a model until the user has seen their own image render correctly on that model's watch. Use the words "verified", "observed" and "assumed" deliberately, and record which one applies to each profile field.
 
@@ -109,7 +118,7 @@ In Wireshark:
 3. Identify the stages:
    - Service discovery and CCCD enables (writes of `0100` to descriptor handles). The Halo used handles 0x22, 0x25, 0x28, 0x2B, 0x2E.
    - A start or header command.
-   - A long run of identical-length Write Commands (no response) carrying payload. The Halo used 48-byte chunks to handle 0x2A.
+   - A long run of identical-length Write Commands (no response) carrying payload. The Halo used 177-byte writes to handle 0x2A (MTU 247), grouped into windows of up to 22 writes.
    - Periodic notifications from the watch that gate the next batch. The Halo sent 177-byte notifications on 0x2A.
    - A final commit or completion exchange.
 4. Export the payload bytes of the chunk run and concatenate them. This should equal the face file (possibly with a small wrapper).
@@ -124,7 +133,7 @@ Characterise the protocol before writing code:
 - Whether chunks carry a sequence number or offset.
 - Where the watch pauses the sender (the notifications). Write a table: after chunk N, wait for notification X.
 - Write type: Write Command (no response) versus Write Request (with response). The Halo used WRITE_TYPE_NO_RESPONSE.
-- MTU: if chunks exceed ATT_MTU - 3 they will be truncated. A 48-byte chunk fits the default 23-byte MTU only if MTU was raised first; check the capture for an MTU exchange and replicate it (`requestMtu`).
+- MTU: if chunks exceed ATT_MTU - 3 they will be truncated. A 177-byte write needs ATT_MTU of at least 180, so the Halo app requests 247 (`requestMtu`) and the transfer is exactly 177 bytes per write.
 - Any bonding or encryption. If the capture shows the link was encrypted, the uploader must use the same bonded device.
 
 Turn this into a replay script. The reference project's format is deliberately simple text:
@@ -135,13 +144,18 @@ W 25 0100
 W 28 0100
 W 2B 0100
 W 2E 0100
-W 2A <48-byte hex> # data chunk, no response
-W 2A <48-byte hex>
-R 24 000001010000  # wait until the watch notifies the expected pattern
+W 2A 000000001600  # window marker: chunk count u16le at the end
+W 2A <177-byte hex># chunk 1: seq, 0E 00, window index, 12-byte field, data
+W 2A <177-byte hex># chunk N: seq u16le, data
+R 24 000001010000  # optional wait if this model's capture gates on a notification
 ...
 ```
 
-`W` writes, `R` waits. Keep the format human-readable so failures can be traced by line number. The handles, chunk size and wait pattern above are the Halo's; another model gets its own values from its own capture.
+`W` writes, `R` waits. Keep the format human-readable so failures can be traced by
+line number. The Halo capture contains no `R` lines at all — it paces on the ATT
+write callback — but the format supports them for models that gate explicitly. The
+handles and chunk size above are the Halo's; another model gets its own values from
+its own capture.
 
 ### Phase D: Replay the captured transfer verbatim
 
@@ -177,40 +191,48 @@ The NoiseFit Halo reference values are shown below. For any other model, treat t
 | Magic             | `afafaf02`                                             |
 | Uncompressed size | 754368 (466 x 466 x 2)                                 |
 | Block count       | 185                                                    |
-| Address table     | 185 entries x 2 bytes (offsets into the payload)       |
-| Header size       | 396 bytes observed (not fully mapped)                  |
-| Payload           | FastLZ-compressed RGB565 pixel data, split into blocks |
-| Trailer           | 4-byte CRC-32/MPEG-2                                   |
+| Block table       | 185 entries x 2 bytes, `0x8000 \| compressed size`     |
+| Header size       | `26 + 2 * block_count` = 396 bytes for 185 blocks        |
+| Payload           | LZO1X, one stream per 4096-byte block                  |
+| Checksums         | field 8 = blob checksum, field 16 = payload checksum   |
+| Trailer           | `crc32(prefix22 \|\| container)`, little endian, zlib CRC32 |
 
 Method for discovering fields:
 
 1. Find the width x height x bytes-per-pixel number in the header. That anchors the uncompressed size.
 2. Find a small integer that equals the number of address-table entries. The table is a monotonically increasing list of offsets; check that the last offset is near the file length.
 3. Decompress the payload blocks and check that the total is the uncompressed size.
-4. Work out the trailer: compute candidate checksums over candidate ranges and compare with the last 4 bytes.
+4. Work out the trailer: on the Halo it is `crc32(prefix22 || container)` stored
+   little endian. On a new model, compute candidate checksums over candidate
+   ranges and compare with the last 4 bytes; do not assume the range.
 
-CRC-32/MPEG-2 reference implementation (poly 0x04C11DB7, init 0xFFFFFFFF, no reflection, no final XOR):
+The Halo does **not** use a standard CRC. Its checksum comes from
+`com.zhapp.ble.utils.lzo.LzoCrcUtils` and mixes bytes through a vendor 256-entry
+S-box (`table[0] == 0x60454269`), so no polynomial parameter set reproduces it:
 
 ```python
-def crc32_mpeg2(data: bytes) -> int:
+def vendor_crc(data: bytes, table: tuple) -> int:
     crc = 0xFFFFFFFF
     for b in data:
-        crc ^= b << 24
-        for _ in range(8):
-            if crc & 0x80000000:
-                crc = ((crc << 1) ^ 0x04C11DB7) & 0xFFFFFFFF
-            else:
-                crc = (crc << 1) & 0xFFFFFFFF
-    return crc
+        crc = table[(crc ^ b) & 0xFF] ^ (crc >> 8)
+    return (~crc) & 0xFFFFFFFF
 ```
 
-Also try the common variants (reflected CRC-32, CRC-32/BZIP2, CRC-32/CKSUM) if MPEG-2 does not match. Test the checksum over the payload only, over header plus payload, and with different byte orders for storing the result. Do not assume.
+The table is in `builder/lzo_crc32.py` and
+`android/app/src/main/java/com/jay/wfup/LzoCrc32.java`. This function covers two
+header fields, not the transfer tail. On the Halo the 4-byte tail is
+`crc32(prefix22 || container)`, little endian, using standard zlib CRC32 — it was
+solved in `ThemeManager.initUpload`. Do not assume that holds on another model.
+
+For a **new** model, still try the common candidates: reflected CRC-32, CRC-32/BZIP2,
+CRC-32/CKSUM, CRC-32/MPEG-2, Fletcher-32 and Adler-32, over the payload only, over
+header plus payload, and in both byte orders. Do not assume.
 
 Open questions to settle by experiment on any new watch:
 
 - RGB565 byte order (little or big endian) and whether red and blue are swapped.
 - Whether the image is stored row-major, column-major, or in tiles.
-- FastLZ level (1 or 2) and block size; whether blocks are compressed independently.
+- LZO1X block size (the Halo uses 4096) and whether blocks are compressed independently (they are).
 - Whether the header contains fields beyond size and block count (flags, preview offsets, checksums of the header).
 
 ### Phase F: Build the converter
@@ -245,8 +267,8 @@ The assertion is intentional: if a new model's profile has the wrong resolution 
 Notes:
 
 - If the watch is round, check whether the vendor masks outside the circle and whether the corners must be black. For square or rounded-rectangle models, check whether the vendor expects rounded corners to be pre-masked. Take this from the vendor's own face file, not from assumption.
-- Keep block boundaries consistent with the vendor's. The reference converter's output sizes (14 KB to 442 KB) versus the vendor's 49,887 bytes show that its block or match strategy does not yet match; a smaller, matching output is the signal that the layout is right.
-- FastLZ: port the reference algorithm exactly (level 1 or 2). A different compressor can still decode correctly, but if the watch's decoder is strict about the opcode stream you will see corruption. Test with synthetic data first.
+- Keep block boundaries consistent with the vendor's. The Halo uses 4096-byte blocks, and the current compressor actually beats the vendor stream (43,465 B vs 49,887 B on the same blob), so a smaller output is expected here; a *larger* output or a failed round-trip is the warning sign.
+- LZO1X: implement the real codec. The Halo's decoder accepts any valid LZO1X opcode stream, and both `lzo1x.py` and `Lzo1x.java` in this repo round-trip the vendor's own stream, so use them as the reference. Test with synthetic data first.
 
 Verification helpers (build these early):
 
@@ -275,50 +297,82 @@ Also check whether the capture contains per-transfer metadata (face size, a face
 
 ## 3A. Model profiles
 
-All model-specific values go in a profile file, one per watch model, for example `main/profiles/halo.json`. The builder, the replay generator and the verifier read the profile; none of them should hard-code Halo values.
+All model-specific values go in a profile file, one per watch model, for example `profiles/halo.json`. The builder, the replay generator and the verifier read the profile; none of them should hard-code Halo values.
 
 ### Profile template
 
 ```json
 {
   "model": "NoiseFit Halo",
-  "profile_status": "verified-transport, partial-conversion",
+  "profile_status": "transport-verified, container-verified, layout-verified, rendering-verified-with-open-cell-background",
   "display": {
     "width": 466,
     "height": 466,
     "shape": "round",
     "pixel_format": "RGB565",
-    "bytes_per_pixel": 2,
-    "byte_order": "unconfirmed"
+    "byte_order": "big-endian"
   },
   "container": {
     "magic": "afafaf02",
     "uncompressed_size": 754368,
     "block_count": 185,
-    "address_table_entry_bytes": 2,
-    "header_size": 396,
-    "compression": "FastLZ",
-    "fastlz_level": "unconfirmed",
-    "trailer": "CRC-32/MPEG-2 (poly 0x04C11DB7, init 0xFFFFFFFF, no reflection, no xorout)"
+    "block_bytes": 4096,
+    "header_size_formula": "26 + 2 * block_count",
+    "compression": "LZO1X",
+    "checksums": {
+      "field_8": "vendor checksum of the uncompressed blob",
+      "field_16": "vendor checksum of the compressed payload",
+      "algorithm": "256-entry vendor S-box, table[0] == 0x60454269"
+    }
+  },
+  "transfer": {
+    "prefix": "00 10 + 16 zeros + container length u32le",
+    "tail": "crc32(prefix22 || container) little endian",
+    "piece_count": "ceil((container_length + 26) / 3846)"
   },
   "ble": {
     "cccd_handles": ["22", "25", "28", "2B", "2E"],
     "data_handle": "2A",
+    "command_handles": ["21", "24"],
     "write_type": "NO_RESPONSE",
-    "chunk_bytes": 48,
-    "wait_handle": "24",
-    "wait_pattern": "000001010000",
-    "gating_notification_bytes": 177,
-    "mtu_request": "check capture"
+    "chunk_bytes": 177,
+    "max_chunks_per_window": 22,
+    "window_marker": "00 00 00 00 <chunkCount u16le>",
+    "window_1_payload_bytes": 3824,
+    "later_window_payload_bytes": 3846,
+    "flow_control": {
+      "after_marker": "000001010000",
+      "after_last_chunk": "000001000000",
+      "rejection": "000001020000"
+    },
+    "command_session": {
+      "face_transfer_body": "53 3A ... face id 916 ...",
+      "required": true
+    },
+    "mtu_request": 247
+  },
+  "blob_layout": {
+    "config_header": [0, 514],
+    "widget_table_offset": "0x0180",
+    "widget_record": "u16 x, y, w, h; u8 kind; u32 sheet_offset",
+    "preview": [514, 192714],
+    "mid_block": [192714, 320056],
+    "artwork": [320056, 627616],
+    "glyph_atlas": [627616, 754368],
+    "pixels": "RGB565 big endian, stride width * 2",
+    "screen_rows": "0-135 mid block, 136-465 artwork, sprites on top"
   },
   "evidence": {
     "capture_file": "Docs/btsnoop_hci.log",
-    "reference_face_bytes": 49887
+    "reference_blob_bytes": 754368
   }
 }
 ```
 
-Mark every field with how you know it. Use `verified` (checked against a real capture or file from this model), `observed` (seen once), `assumed` (copied from another model) or `unconfirmed`. A new profile should start with every value `assumed` and move each one up the ladder as evidence arrives. One practical way is a parallel `"field_status"` object in the same file that maps each field name to its status.
+This is a summary; the real, per-field profile is
+[`profiles/halo.json`](../../profiles/halo.json).
+
+Mark every field with how you know it. Use `verified` (checked against a real capture or file from this model), `observed` (seen once), `assumed` (copied from another model) or `unconfirmed`. A new profile should start with every value `assumed` and move each one up the ladder as evidence arrives. The reference profile uses a nested `"status"` object per section that maps each field to `verified`, `observed`, `assumed` or `unconfirmed`.
 
 ### Discovering a new model's profile
 
@@ -350,13 +404,13 @@ Work through these in order. Each one replaces an assumption with a measurement.
 
 ### Contributing a profile
 
-When a profile reaches at least `transport-verified`, add it to the repo as `main/profiles/<model>.json`, add a row to the compatibility matrix below, and include the capture or a redacted transfer table. Remove or mask the user's MAC address, account IDs and tokens first. Pull requests and issues go to https://github.com/star-warrior/jailbreak-noiseFit.
+When a profile reaches at least `transport-verified`, add it to the repo as `profiles/<model>.json`, add a row to the compatibility matrix below, and include the capture or a redacted transfer table. Remove or mask the user's MAC address, account IDs and tokens first. Pull requests and issues go to https://github.com/star-warrior/jailbreak-noiseFit.
 
 ### Compatibility matrix
 
 | Model                 | Profile     | Transport | Conversion | Notes                                              |
 | --------------------- | ----------- | --------- | ---------- | -------------------------------------------------- |
-| NoiseFit Halo         | `halo.json` | Verified  | Partial    | Reference model, tested on one watch and one phone |
+| NoiseFit Halo         | `halo.json` | Verified  | Verified, one open issue | Photo renders with live clock; glyph cell backgrounds still black. One watch, one phone. |
 | Other NoiseFit models | none yet    | Unknown   | Unknown    | Use this section to create a profile               |
 
 ## 4. Validation ladder
@@ -373,7 +427,7 @@ Move up one rung at a time. Stop and debug when a rung fails.
 
 Use a checkerboard or a corner-marker pattern; it is far easier to diagnose than a photo.
 
-The pre-generated faces in `main/watchfaces/` are Halo-specific (size, resolution and header). Do not use them to test another model.
+The pre-generated faces in `watchfaces/` are Halo-specific (size, resolution and header). Do not use them to test another model.
 
 ## 5. Building the uploader app
 
@@ -393,7 +447,7 @@ Key implementation points (Android BLE):
 - Logging: print a line for every step with the index (`#12 wait 2A <- ...`, `ack ok ...`, `replay DONE`). The reference project's logcat markers are `replay start`, `#X wait ...`, `ack ok ...`, `> 2a 177B`, `replay DONE`.
 - Handles versus UUIDs: handles can change between models, firmware versions and reconnects. Store UUIDs in the profile as the primary key and keep handles as a debugging aid. Resolve handles at runtime from the discovered services where possible.
 
-Helper script pattern (PowerShell, as in the reference). The reference implementation of this pattern is `main/scripts/upload.ps1`; read it before writing a new one.
+Helper script pattern (PowerShell, as in the reference). The reference implementation of this pattern is `scripts/upload.ps1`; read it before writing a new one.
 
 ```powershell
 adb shell pm disable-user --user 0 <official.app.package>   # prevent a second BLE central
@@ -454,7 +508,7 @@ Static analysis targets in Ghidra or IDA: functions named like `make_compression
 
 1. A capture log and a short table of the transfer stages.
 2. A replay script that reproduces the official transfer byte for byte.
-3. A model profile (`main/profiles/<model>.json`) with every field marked verified, observed, assumed or unconfirmed.
+3. A model profile (`profiles/<model>.json`) with every field marked verified, observed, assumed or unconfirmed.
 4. A format notes file: magic, sizes, header map, checksum variant, pixel order, compression details.
 5. A converter with a verifier, a round-trip decompressor, and a preview renderer.
 6. An uploader app (or reuse the reference one) with a serialised GATT queue and loggable output.
@@ -467,13 +521,23 @@ Repository: https://github.com/star-warrior/jailbreak-noiseFit
 Repository map:
 
 ```
-Docs/                      Approaches report, HCI capture, extracted data, transcript
-main/builder/              build_face.py, generate_replay.py, verify_build.py
-main/profiles/             One JSON profile per watch model (halo.json is the reference)
-main/scripts/              upload.ps1, test_replay.ps1, dump_replay.ps1
-main/watchfaces/           face_solid.lz, face_gradient.lz, face_random.lz (Halo-specific)
-main/MainActivity.java     Uploader app activity
-main/WFCompilerRunner.java Native compiler wrapper
+android/                   Full Android app (Java, no dependencies)
+  app/src/main/java/com/jay/wfup/
+    CropView.java          Square crop viewport (drag + pinch)
+    FacePipeline.java      Photo -> composed 466x466 screen -> blob
+    FaceBuilder.java       Blob -> container (header, checksums)
+    Lzo1x.java             LZO1X codec
+    LzoCrc32.java          Vendor S-box checksum
+    ReplayBuilder.java     Prefix, CRC32 tail, windows, chunks
+    MainActivity.java      UI, BLE client, replay engine, probes
+  app/src/main/assets/     blob.bin, replay3.txt
+builder/                   build_face.py, verify_build.py, generate_replay.py,
+                           lzo1x.py, lzo_crc32.py
+profiles/                  One JSON profile per watch model (halo.json is the reference)
+scripts/                   upload.ps1, test_replay.ps1, dump_replay.ps1
+watchfaces/                face_solid.lz, face_gradient.lz, face_random.lz (Halo-specific)
+Docs/                      PROTOCOL.md, TECHNICAL_REPORT.md, APPROACHES_REPORT.md,
+                           btsnoop_hci.log, wf_transcript.txt
 skills/jailbreak-noiseFit/ This skill
 llms.txt                   Context file for AI assistants
 NoiseFit_Halo_uploader.apk Pre-built debug APK
@@ -487,17 +551,40 @@ git clone https://github.com/star-warrior/jailbreak-noiseFit.git
 cd jailbreak-noiseFit
 pip install pillow
 adb install NoiseFit_Halo_uploader.apk
-python main/builder/build_face.py input.png face.lz --profile main/profiles/<model>.json
-python main/builder/verify_build.py face.lz --profile main/profiles/<model>.json
-python main/builder/generate_replay.py face.lz --profile main/profiles/<model>.json
-.\main\scripts\upload.ps1
+python builder/build_face.py input.png face.lz
+python builder/verify_build.py face.lz
+python builder/generate_replay.py face.lz android/app/src/main/assets/replay3.txt
+.\scripts\upload.ps1
 ```
 
-If the user's model has no profile yet, go to section 3A before building anything. If the user's checkout predates profile support and the scripts do not accept `--profile`, the first task is to move their hard-coded constants (resolution, uncompressed size, block count, magic, handles, chunk size) into `main/profiles/halo.json` and make the three builder scripts read from it.
+If the user's model has no profile yet, go to section 3A before building anything. The Halo reference flow is phone-only and does not need Python:
 
-Then in the app: enter the user's own watch MAC, press REPLAY, watch logcat for `replay DONE`.
+1. force-stop the official app;
+2. connect by the watch's own MAC and wait for `all cccd done`;
+3. **PICK PHOTO** → square crop dialog (drag to move, pinch to zoom). The square is
+   the whole round screen, so nothing is squashed;
+4. **BUILD FACE (photo over whole screen)** — the app composes 466×466, regenerates
+   the preview, splits rows 0–135 into the mid block and 136–465 into the artwork,
+   LZO1X-compresses, and self-checks;
+5. **UPLOAD BUILT FACE** and wait for `replay DONE`.
 
-For the Halo, start with `main/watchfaces/face_solid.lz` to prove transport, then try the user's image. For any other model, start with rung 1 of the validation ladder instead. If the image renders wrongly, move to the validation ladder in section 4 and the troubleshooting table in section 8. The main open problem in the reference project is matching the official compiler's block layout and compression so arbitrary images render faithfully and compress to a comparable size; contributions there are the most valuable.
+For the Halo, start with `watchfaces/face_solid.lz` to prove transport, then try the
+user's image. For any other model, start with rung 1 of the validation ladder
+instead.
+
+Current Halo-specific facts worth carrying into a new port:
+
+- the screen is composed from two stacked blocks, not one 466×466 image; the split
+  row is 136 and there is no scaling;
+- the config header at offset 0 contains a widget table at `0x180`, 13-byte records
+  of `x, y, w, h, kind, sheet offset`;
+- the glyph atlas stores colour in the pixels, so hours and minutes can differ;
+- the vendor APK documents the intended schema in
+  `assets/dial/style/OSW-802N/template1..4.json` (`textbox`, `font_color`,
+  `font_bkcolor`, `font_size`, `align`, `alpha`, `zorder`);
+- the open cosmetic issue is the opaque black backing in the glyph cells. The
+  `PLATE PROBE` build paints the sheet backgrounds to decide whether the firmware
+  blits cells opaque or fills a config rectangle. Do not claim it is fixed.
 
 ## 11. How to talk to the user
 

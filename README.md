@@ -1,342 +1,277 @@
-<div align="center">
-
 # NoiseFit Halo Face Builder
 
-**Build custom watchfaces and send them to a NoiseFit Halo over Bluetooth LE, completely offline and without the in-app paywall.**
+Build custom watch faces for a **NoiseFit Halo** and install them over Bluetooth
+LE — entirely offline, with no account, no server, no root, and no vendor compiler.
 
-<br>
+The whole pipeline runs on the phone: pick a photo, crop it the way the vendor app
+does, and the app composes a native face container and uploads it using the exact
+write sequence the official app uses.
 
-![Python](https://img.shields.io/badge/PYTHON-3776AB?style=for-the-badge&logo=python&logoColor=white)
-![Java](https://img.shields.io/badge/JAVA-ED8B00?style=for-the-badge&logo=openjdk&logoColor=white)
-![Android](https://img.shields.io/badge/ANDROID-3DDC84?style=for-the-badge&logo=android&logoColor=black)
-![Bluetooth LE](https://img.shields.io/badge/BLUETOOTH%20LE-0082FC?style=for-the-badge&logo=bluetooth&logoColor=white)
-![PowerShell](https://img.shields.io/badge/POWERSHELL-5391FE?style=for-the-badge&logo=powershell&logoColor=white)
-![Pillow](https://img.shields.io/badge/PILLOW-2E2E2E?style=for-the-badge&logo=python&logoColor=white)
-
-![Termux](https://img.shields.io/badge/TERMUX-000000?style=for-the-badge&logo=termux&logoColor=white)
-![ADB](https://img.shields.io/badge/ADB-3DDC84?style=for-the-badge&logo=android&logoColor=black)
-![Wireshark](https://img.shields.io/badge/WIRESHARK-1679A7?style=for-the-badge&logo=wireshark&logoColor=white)
-![Ghidra](https://img.shields.io/badge/GHIDRA-B5262B?style=for-the-badge)
-![Git](https://img.shields.io/badge/GIT-F05032?style=for-the-badge&logo=git&logoColor=white)
-![GitHub](https://img.shields.io/badge/GITHUB-181717?style=for-the-badge&logo=github&logoColor=white)
-
-<br>
-
-![Status](https://img.shields.io/badge/STATUS-WORK%20IN%20PROGRESS-F59E0B?style=flat-square)
-![BLE Transfer](https://img.shields.io/badge/BLE%20TRANSFER-VERIFIED-22C55E?style=flat-square)
-![Face Format](https://img.shields.io/badge/FACE%20FORMAT-PARTIALLY%20SOLVED-F59E0B?style=flat-square)
-![Offline](https://img.shields.io/badge/OFFLINE-NO%20SERVER%20CALLS-0EA5E9?style=flat-square)
-![Root](https://img.shields.io/badge/ROOT-NOT%20REQUIRED-8B5CF6?style=flat-square)
-
-</div>
+> Independent research project. Not affiliated with, endorsed by, or supported by
+> Noise. "NoiseFit" and "Halo" are trademarks of their respective owners.
 
 ---
 
-## Table of Contents
+## Status
 
-1. [What This Project Is](#what-this-project-is)
-2. [Purpose](#purpose)
-3. [Problem Statement](#problem-statement)
-4. [How It Works](#how-it-works)
-5. [Current Status](#current-status)
-6. [Repository Layout](#repository-layout)
-7. [Getting Started](#getting-started)
-8. [Pre-Generated Faces](#pre-generated-faces)
-9. [Technical Notes](#technical-notes)
-10. [Known Limitations](#known-limitations)
-11. [Roadmap and Help Wanted](#roadmap-and-help-wanted)
-12. [Troubleshooting](#troubleshooting)
-13. [Contributing](#contributing)
-14. [Disclaimer](#disclaimer)
+| Area | State | Notes |
+| ---- | ----- | ----- |
+| BLE transport | **Verified** | Reproduces all 302 data writes of a real accepted transfer byte for byte |
+| Container format | **Verified** | Dynamic `26 + 2n` header, two vendor checksums, LZO1X per 4096-byte block |
+| Blob layout | **Verified** | Every image region confirmed on hardware with a targeted probe |
+| Photo → face on phone | **Verified** | Photo renders with correct colours, correct orientation and a live clock |
+| Full-bleed geometry | **Verified** | Photo is continuous across the clock bar / artwork seam, no scaling or offset |
+| Square crop dialog | **Verified** | Drag and pinch, nothing squashed to fit |
+| Clock cell backgrounds | **Open** | Glyph cells carry a black backing that shows as boxes over a photo |
+| Other models | **Untested** | Only the Halo, on one phone, has been exercised |
 
-**More documentation:**
-[Approach report](Docs/APPROACHES_REPORT.md) |
-[AI assistant context](llms.txt) |
-[Setup and porting skill](skills/jailbreak-noiseFit/skill.md)
+Photo face max size seen in practice: a few hundred kilobytes per container after
+LZO1X. The app keeps a 400 000 B sanity gate with an explicit override.
 
 ---
 
-## What This Project Is
+## What you get
 
-NoiseFit Halo Face Builder is a reverse-engineering project that reproduces how the official NoiseFit app sends watchfaces to a NoiseFit Halo smartwatch.
+**`android/`** — the complete Android app (Java, no dependencies):
 
-It has two halves:
+- square crop dialog like the vendor custom-face step
+- on-device face build: photo → RGB565 → splice into the reference blob → LZO1X →
+  container with vendor checksums → self-check by decompressing and comparing
+- BLE uploader: command session, windowed framing, per-window flow control
+- live log of every step
 
-- **A face builder** (Python) that takes an ordinary image and tries to turn it into the binary watchface format the watch understands (an `AFAFAF02` container holding compressed RGB565 pixel data).
-- **A BLE uploader** (Android app plus helper scripts) that replays the same Bluetooth Low Energy write sequence the official app uses, so the watch accepts the face as if it came from NoiseFit.
+**`builder/`** — PC reference implementation in Python: build a container, verify
+it, generate a replay script. Useful for analysis; never required by the app.
 
-Everything runs locally. No account, no server, no root access.
+**`watchfaces/`** — pre-generated test containers for bringing up the transport.
 
-## Purpose
+**`Docs/`** — protocol reference, engineering report, approach history, captures.
 
-The goal is simple: **your watch should display the faces you want**, not only the ones the app decides to unlock for you.
+**`skills/`** — a procedural skill for porting the approach to another watch.
 
-This project exists to:
+---
 
-- Document how NoiseFit transfers custom and premium faces to the watch, so the process is understood rather than a black box.
-- Let owners upload their own designs to hardware they own.
-- Provide an open, offline alternative to the paywalled in-app face flow.
-- Serve as a reference for anyone working on similar Veryfit-family watch protocols.
-
-## Problem Statement
-
-Custom watchface upload in the NoiseFit app sits behind a paywall, and the process is tied to the vendor's servers. In practice that means:
-
-1. **You cannot send your own image to your own watch** without going through the app's gated flow.
-2. **The face compiler is a closed native library** (`libVeryFitMulti.so`). It is fragile: it crashes with a null pointer dereference unless a full package directory (`iwf.json`, `fonts/`, `preview/`) is present, and it cannot be patched because a modified APK cannot be re-signed in a way the app accepts.
-3. **The transfer protocol is undocumented.** There is no public description of the face container format or of the BLE handshake used to push it.
-
-So the work breaks down into two sub-problems:
-
-| Sub-problem | Question                                                                 | Result                       |
-| ----------- | ------------------------------------------------------------------------ | ---------------------------- |
-| Transport   | Can we make the watch accept a face over BLE without the official app?   | Yes, verified                |
-| Conversion  | Can we turn any arbitrary image into a face the watch renders correctly? | Partially, still in progress |
-
-## How It Works
-
-```mermaid
-flowchart LR
-    A[Source image] --> B[build_face.py]
-    B -->|resize to 466x466, RGB565, FastLZ| C[AFAFAF02 .lz face]
-    C --> D[generate_replay.py]
-    D -->|48-byte BLE chunks| E[replay3.txt]
-    E --> F[Uploader app: REPLAY]
-    F -->|BLE writes| G[NoiseFit Halo]
-```
-
-**Step by step**
-
-1. `build_face.py` resizes the image to 466 x 466, converts it to RGB565, compresses it with a FastLZ-style compressor, and wraps it in the `AFAFAF02` container (header, address table, payload, CRC trailer).
-2. `generate_replay.py` slices the finished `.lz` into 48-byte chunks and emits `replay3.txt`, a script of BLE operations (enable notifications, write chunks, wait for acknowledgements).
-3. The uploader app (`com.jay.wfup`) connects to the watch by MAC address and plays that script back with the REPLAY button.
-4. The watch acknowledges each stage, and the log ends with `replay DONE`.
-
-**Why the native library is not needed**
-
-The watch only validates the container header and the structure of the compressed data. It does not care how the file was produced. The Python builder generates the same container independently, so the crashing native compiler is never called.
-
-## Current Status
-
-| Area                      | State               | Notes                                                                                                                                  |
-| ------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| BLE connection and replay | Verified            | All writes acknowledged, watch returns the expected 177-byte notifications, log ends in `replay DONE`                                  |
-| Container header          | Verified            | Magic, uncompressed size and block count match a real `watchface.zip` face                                                             |
-| Pre-generated test faces  | Working             | Solid, gradient and random faces transfer successfully                                                                                 |
-| Arbitrary image to face   | Partial             | Header is correct, but compressed output differs from the official compressor and rendering of arbitrary photos is still being refined |
-| Compression efficiency    | Needs work          | Official face is 49,887 bytes; ours ranges widely depending on content                                                                 |
-| On-phone build (Termux)   | Works, manual setup | Termux must be installed by hand                                                                                                       |
-| Standalone Java compiler  | Not started         | Considered, deprioritised                                                                                                              |
-
-Tested on a Samsung SM-M336BU running Android 16 with a NoiseFit Halo.
-
-## Repository Layout
+## Repository layout
 
 ```
 NoiseFit_Halo_Face_Builder/
+├── android/                        Android Studio / Gradle project
+│   ├── app/src/main/java/com/jay/wfup/
+│   │   ├── CropView.java           square crop viewport (drag + pinch)
+│   │   ├── FacePipeline.java       photo -> composed 466x466 screen -> blob
+│   │   ├── FaceBuilder.java        blob -> container (header, checksums)
+│   │   ├── Lzo1x.java              LZO1X codec
+│   │   ├── LzoCrc32.java           vendor S-box checksum
+│   │   ├── ReplayBuilder.java      container -> BLE window/chunk framing
+│   │   └── MainActivity.java       UI, BLE client, replay engine
+│   └── app/src/main/assets/
+│       ├── blob.bin                754368-byte reference blob
+│       └── replay3.txt             captured replay script
+├── builder/                        Python reference tools
+│   ├── build_face.py
+│   ├── generate_replay.py
+│   ├── verify_build.py
+│   ├── lzo1x.py
+│   └── lzo_crc32.py
+├── scripts/                        PowerShell helpers (upload, dump replay)
+├── watchfaces/                     Pre-generated test containers
+├── profiles/halo.json              Every model-specific value, with status
 ├── Docs/
-│   ├── APPROACHES_REPORT.md        Full write-up of what was tried and learned
-│   ├── btsnoop_hci.log             Raw HCI capture of a real transfer
-│   ├── extracted_FS_data_log_bt_btsnoop_hci.log
-│   └── wf_transcript.txt           Session transcript of write sequences
-├── main/
-│   ├── builder/
-│   │   ├── build_face.py           Image -> RGB565 -> FastLZ -> AFAFAF02 .lz
-│   │   ├── generate_replay.py      .lz -> replay3.txt (48-byte BLE chunks)
-│   │   └── verify_build.py         Checks a built .lz against expected header values
-│   ├── scripts/
-│   │   ├── dump_replay.ps1         Dumps replay data (see script header)
-│   │   ├── test_replay.ps1         Original replay test reference
-│   │   └── upload.ps1              Disables NoiseFit, launches app, watches logcat
-│   ├── watchfaces/
-│   │   ├── face_solid.lz           Pre-generated solid face (14,848 bytes)
-│   │   ├── face_gradient.lz        Pre-generated gradient face (141,084 bytes)
-│   │   └── face_random.lz          Pre-generated random face (442,353 bytes)
-│   ├── MainActivity.java           Uploader app: BLE connection, REPLAY, MAC input
-│   └── WFCompilerRunner.java       Compiler runner with package-directory fix
-├── skills/
-│   └── jailbreak-noiseFit/
-│       └── skill.md                Skill for AI assistants: setup and porting guide
-├── llms.txt                        Context file for AI assistants
+│   ├── PROTOCOL.md                 Authoritative container + BLE reference
+│   ├── TECHNICAL_REPORT.md         How it was solved, with evidence
+│   ├── APPROACHES_REPORT.md        What was tried, what failed, what replaced it
+│   ├── btsnoop_hci.log             HCI capture of a real accepted transfer
+│   └── wf_transcript.txt           Write-by-write session transcript
+├── skills/jailbreak-noiseFit/      Procedural skill for other models
 ├── NoiseFit_Halo_uploader.apk      Pre-built debug APK
-├── project.toml                    Project metadata
-└── README.md
+├── README.md
+├── setup.md
+├── llms.txt
+└── project.toml
 ```
 
-## Getting Started
+---
 
-### Prerequisites
+## Quick start
 
-- A NoiseFit Halo watch, already paired once with the NoiseFit app so you know its MAC address
-- An Android phone (Android 12 or newer recommended for BLE permissions)
-- For the PC route: Python 3, Pillow, ADB, and PowerShell
-- USB debugging enabled on the phone
+### 1. Phone only (recommended)
 
-### 1. Install the uploader app
+1. Install `NoiseFit_Halo_uploader.apk` (`adb install NoiseFit_Halo_uploader.apk`),
+   or build `android/` yourself — see [`setup.md`](setup.md).
+2. Pair the watch with the official app once, note its Bluetooth MAC, then
+   **force-stop the official app**. Only one app can hold the connection.
+3. Open **WF Uploader**, paste the MAC, press **CONNECT BY MAC**, grant Bluetooth
+   permissions, wait for `all cccd done`.
+4. **PICK PHOTO** → drag/pinch in the square crop dialog → **USE CROP**.
+   The square is the whole round screen, so nothing gets squashed.
+5. **BUILD FACE (photo over whole screen)**.
+6. **UPLOAD BUILT FACE**. Keep the app open until the log says `replay DONE`.
+
+The watch keeps showing the new face after the app closes.
+
+### 2. Build the app from source
 
 ```bash
-adb install NoiseFit_Halo_uploader.apk
+cd android
+gradle assembleDebug            # or: ./gradlew assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-This installs `com.jay.wfup`. The app provides MAC input, a REPLAY button, and a TEST COMPILER button (the latter crashes by design on the stock native library; you do not need it).
+Requirements and platform notes: [`setup.md`](setup.md).
 
-To build from source, the uploader's Java sources (`MainActivity.java`,
-`WFCompilerRunner.java`) are in `main/`. Add them to an Android Studio project
-with BLE permissions, then run Build > Build APK(s).
-
-### 2. Pick a workflow
-
-#### Workflow A: PC and BLE (most reliable)
+### 3. PC for the container, phone for the upload
 
 ```bash
 pip install pillow
 
-# Build a face from your image
-python main/builder/build_face.py input_image.png face.lz
-
-# Optional: sanity-check the header
-python main/builder/verify_build.py face.lz
-
-# Generate the BLE replay script
-python main/builder/generate_replay.py
-
-# Launch the upload helper
-.\main\scripts\upload.ps1
+python builder/build_face.py photo.jpg face.lz
+python builder/verify_build.py face.lz
+python builder/generate_replay.py face.lz android/app/src/main/assets/replay3.txt
 ```
 
-Then in the app: enter your watch MAC, press **REPLAY**, and wait for `replay DONE` in logcat.
-
-#### Workflow B: Phone only with Termux
-
-Install Termux manually (the ADB route for `pkg install` is unreliable), then:
-
-```bash
-python main/builder/build_face.py /sdcard/DCIM/Camera/photo.jpg face.lz
-python main/builder/generate_replay.py
-```
-
-Open the uploader app, enter the MAC, and press REPLAY.
-
-#### Workflow C: No build at all
-
-Use one of the pre-generated faces below. Install the APK, enter the MAC, pick a face, press REPLAY.
-
-### 3. Find your watch MAC
-
-Check the NoiseFit app's device screen, your phone's Bluetooth settings under the watch's details, or scan with a BLE scanner app. Use your own address; do not reuse anyone else's.
-
-## Pre-Generated Faces
-
-| `main/watchfaces/face_solid.lz` | 14,848 bytes | Single flat color, the most compressible case |
-| `main/watchfaces/face_gradient.lz` | 141,084 bytes | Smooth color gradient |
-| `main/watchfaces/face_random.lz` | 442,353 bytes | Random pixels, the least compressible case |
-
-All three carry the expected header: magic `afafaf02`, uncompressed size `754368`, block count `185`.
-
-## Technical Notes
-
-### Face container (`.lz`)
-
-| Field             | Value                     | Meaning                             |
-| ----------------- | ------------------------- | ----------------------------------- |
-| Magic             | `afafaf02`                | 4-byte signature                    |
-| Uncompressed size | `754368`                  | 466 x 466 pixels x 2 bytes (RGB565) |
-| Block count       | `185`                     | Entries in the address table        |
-| Address table     | 185 entries, 2 bytes each | Offsets into the compressed payload |
-| Payload           | Variable                  | FastLZ-compressed pixel data        |
-| Trailer           | 4 bytes                   | CRC-32/MPEG-2 over the payload      |
-
-Observed header size is 396 bytes. The exact layout of the remaining header fields is still being mapped.
-
-> CRC-32/MPEG-2 uses polynomial `0x04C11DB7`, initial value `0xFFFFFFFF`, no bit reflection and no final XOR.
-
-### BLE replay sequence
-
-The replay script, observed from logcat and HCI captures:
-
-1. Enable notifications on five characteristics:
-   `W 22 0100`, `W 25 0100`, `W 28 0100`, `W 2B 0100`, `W 2E 0100`
-2. Write face data as 48-byte chunks to handle `2A` using `WRITE_TYPE_NO_RESPONSE`.
-3. At sync points, wait for the watch (`R 24 000001010000`) to send a 177-byte notification on `2A` before continuing.
-4. On success the log prints `replay DONE`.
-
-Typical log markers:
-
-| Log line                        | Meaning                            |
-| ------------------------------- | ---------------------------------- |
-| `replay start`                  | Transfer begun                     |
-| `#X wait 2A <- 000001010000...` | Chunk X sent, waiting on the watch |
-| `ack ok 000001010000`           | Watch acknowledged                 |
-| `> 2a 177B`                     | 177-byte notification received     |
-| `replay DONE`                   | Transfer completed                 |
-
-### Inspecting captures
-
-Open `Docs/btsnoop_hci.log` in Wireshark and filter for ATT writes to handle `0x002a` to see face chunks, or search the transcript for `ack ok`.
-
-## Known Limitations
-
-| Limitation                                     | Effect                                                                | Workaround                                                                 |
-| ---------------------------------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Compression differs from the official compiler | Files can be far larger than the 49,887-byte reference face           | The watch accepts the format; work on a better compressor is ongoing       |
-| Arbitrary photo fidelity not fully confirmed   | Some images may render incorrectly                                    | Test with the pre-generated faces first, compare against `verify_build.py` |
-| Native compiler crash                          | TEST COMPILER button crashes without `fonts/`, `iwf.json`, `preview/` | Not needed; use the Python builder                                         |
-| Termux setup                                   | Cannot be automated over ADB                                          | Install Termux manually, then run the `pkg` commands in-app                |
-| Single device tested                           | Other Noise models are untested                                       | Reports welcome                                                            |
-| Windows-centric tooling                        | `main/scripts/*.ps1` need PowerShell                                  | Use PowerShell on Linux/macOS or run the ADB commands by hand              |
-
-## Roadmap and Help Wanted
-
-The transport layer works. The open problem is **image conversion**, and that is where help is most useful.
-
-- [ ] Fully decode the `AFAFAF02` header beyond magic, size and block count
-- [ ] Understand how the official compressor chooses block boundaries so output sizes match
-- [ ] Confirm pixel order, byte order and any per-block transforms for arbitrary images
-- [ ] Add a preview renderer to check a `.lz` before sending it
-- [ ] Cross-platform upload script (Bash) alongside `upload.ps1`
-- [ ] Support other NoiseFit watch models and resolutions
-- [ ] Optional: Java port of the builder so no PC or Termux is needed
-
-If you have real `.lz` samples from a Halo, even a few, they would help enormously.
-
-## Troubleshooting
-
-**The app crashes when I press TEST COMPILER.**
-Expected. That button calls the native library, which needs files this project deliberately bypasses.
-
-**REPLAY stalls partway.**
-Keep the phone close to the watch, make sure the official NoiseFit app is disabled or force-stopped (`upload.ps1` does this for you), and retry. Only one app can hold the BLE connection.
-
-**The watch connects but shows a corrupted or blank face.**
-Run `verify_build.py` on your `.lz`. If the header is fine, the problem is likely in pixel data, which is the known partial area. Try a pre-generated face to confirm the transport works.
-
-**`pkg install` fails in Termux.**
-Install Termux manually and run the commands inside the app rather than over ADB.
-
-## Contributing
-
-Pull requests and issues are welcome, especially for:
-
-- the compressor and container layout
-- additional watch models
-- captures and sample `.lz` files
-- documentation fixes
-
-Please include logs or captures when reporting a transfer problem.
-
-## Disclaimer
-
-This is an independent, community research project. It is **not affiliated with, endorsed by, or supported by Noise or any related company.** "NoiseFit" and "Halo" are trademarks of their respective owners.
-
-It is intended for interoperability and personal use with hardware you own. Use it with images and designs you created or are licensed to use. You are responsible for complying with the laws and terms of service that apply to you. The software is provided as is, with no warranty; uploading a malformed face to a watch carries some risk, so use it at your own discretion.
+Then rebuild/install the app and press **REPLAY**. The Python compressor produces
+the same byte count as the Java one on the same blob.
 
 ---
 
-<div align="center">
+## How it works
 
-Built with Python, Pillow, a FastLZ port, and a lot of logcat.
-Reverse-engineered from `libVeryFitMulti.so`, `watchface.zip` and the uploader APK (`com.jay.wfup`).
+### Face container
 
-Last updated: October 31, 2026
+```
+0     4     magic "AF AF AF 02"
+4     4     u32le uncompressed blob size         (754368 on the Halo)
+8     4     u32le vendor checksum of the blob
+12    4     u32le compressed payload size
+16    4     u32le vendor checksum of the payload
+20    4     u32le reserved
+24    2     u16le block count
+26    2*n   u16le per block: 0x8000 | compressed size
+26+2n ...   n LZO1X blocks of 4096 bytes
+```
 
-</div>
+The header is dynamic. The tail appended at transfer time is
+`CRC32(prefix22 || container)`, little endian — solved, not a mystery constant.
+
+### Uncompressed blob (754 368 B)
+
+| range | content |
+| --- | --- |
+| `0 .. 514` | config header, including the widget table |
+| `514 .. 192714` | preview 310×310, face-list thumbnail only |
+| `192714 .. 320056` | clock-bar background, 466×136 image + 590-byte tail |
+| `320056 .. 627616` | artwork 466×330, lower part of the round screen |
+| `627616 .. 754368` | glyph sprite sheets (date, digits, colon, AM-PM) |
+
+Pixels are **RGB565 big endian**, stride `width * 2`. Screen composition is 1:1:
+rows 0–135 come from the mid block, rows 136–465 from the artwork, and the sprite
+sheets are blitted on top by the firmware.
+
+A full-bleed photo therefore splits at row 136: rows 0–135 go to the mid block,
+rows 136–465 to the artwork. The config and the sprite sheets stay stock, which is
+why the clock keeps working.
+
+### Config header
+
+The 514-byte config ends with a table of 13-byte widget records at offset `0x180`:
+
+```
+u16 x, u16 y, u16 w, u16 h, u8 kind, u32 sheet offset
+```
+
+`kind` 4 = date row, 10 = digit, 1 = colon. `sheet offset` points at a raw RGB565
+sprite sheet in the atlas block: 10 digit cells of `w*h`, four date cells, one
+colon cell. Colour is baked into the sheet; face B uses a second digit sheet so
+hours and minutes can differ in colour and size.
+
+Full details, byte ranges and the exact field arithmetic:
+[`Docs/PROTOCOL.md`](Docs/PROTOCOL.md).
+
+### BLE transfer
+
+```
+22-byte prefix || container || CRC32(prefix || container)
+```
+
+Then per window: a 6-byte marker, up to 22 chunks of 177 bytes, with a go-ahead
+notification after the marker and a done notification after the last chunk. Before
+any of it, an 18-byte `53 3A` command session must complete on handles 0x24/0x21,
+otherwise the watch rejects every data write. All of it is in
+[`Docs/PROTOCOL.md`](Docs/PROTOCOL.md).
+
+---
+
+## Requirements
+
+- NoiseFit Halo (466×466, LZO1X, `afafaf02` containers). Other models are untested.
+- Android phone with BLE, Android 8.0+ (`minSdk 26`, compiled against SDK 34).
+- For building from source: JDK 17, Android SDK 34, Gradle 8.7+.
+- Optional PC tooling: Python 3.9+ with Pillow.
+
+No internet, server, account or root is used at runtime.
+
+---
+
+## Troubleshooting
+
+**`blob.bin missing`** — the APK lacks the reference blob. Rebuild from `android/`.
+
+**`blob.bin`/`self check failed`** — the compressor produced a stream the decoder
+disagrees with. Nothing is sent. Report the log lines.
+
+**Upload stalls** — keep the phone close, make sure the official app is
+force-stopped, retry. Only one app can hold the BLE connection.
+
+**Old face still shown after `replay DONE`** — the watch may apply the face a few
+seconds after the transfer; wake it and wait. If it still refuses, re-check the
+command session lines in the log.
+
+**Wrong colours** — the blob stores RGB565 big endian. Little-endian output looks
+like a channel swap. Use the app's own build path.
+
+**Black boxes around the clock** — known open issue, see below.
+
+**`verify_build.py` reports a changed config region** — wrong reference blob. Use
+the 754368-byte one from `android/app/src/main/assets/blob.bin`.
+
+---
+
+## Open problems
+
+1. **Clock cell backgrounds.** Sprite cells carry a black backing; over a photo it
+   shows as black boxes around time, date and AM-PM. Probe tooling is in place;
+   the fix is either per-position sheets with the photo painted into the cell
+   background, or a config field if the firmware fills the widget rect itself.
+2. **Widget record fields.** Only `x, y, w, h, kind, sheet` are decoded. Sizes,
+   colours and background alpha for non-time widgets are still unknown.
+3. **Metadata widgets.** Faces that show steps, battery, heart rate or weekday use
+   extra sheets in a larger atlas. Layout is gated by the container type field
+   (`0214` vs `0203`); untested whether the Halo accepts a bigger layout.
+4. **One model, one phone.** Every other NoiseFit model needs its own capture.
+
+Roadmap and evidence: [`Docs/TECHNICAL_REPORT.md`](Docs/TECHNICAL_REPORT.md).
+
+---
+
+## Contributing
+
+Most valuable right now:
+
+- test results on other NoiseFit models, with GATT dumps and face captures
+- a photo face with the clock cell backgrounds eliminated
+- captures of vendor faces that show steps/day/battery, so the widget table can be
+  mapped further
+- an LZO1X match finder that stays smaller than the vendor stream
+
+Please scrub MAC addresses, account IDs and tokens from anything you publish.
+
+---
+
+## Disclaimer and licence
+
+For interoperability with hardware you own, using artwork you own or have licensed.
+A malformed face can leave the watch showing a broken face; recovery is normally a
+re-sync through the official app or a factory reset. Test on hardware you can
+recover. Provided as is, without warranty.
+
+MIT — see [`LICENSE`](LICENSE).

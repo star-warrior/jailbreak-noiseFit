@@ -73,13 +73,15 @@ $RECYCLE.BIN/
 
 # ---------- Generated build output ----------
 # Faces and replay scripts you build locally from your own images.
-# The curated test faces in main/watchfaces/ are NOT ignored.
+# The curated test faces in watchfaces/ are NOT ignored.
 /*.lz
 /face*.lz
 /output/
 /outputs/
 replay*.txt
 !Docs/**/replay*.txt
+# The app ships a captured replay script as an asset.
+!android/app/src/main/assets/replay*.txt
 
 # ---------- Local captures and logs ----------
 # Raw HCI captures, logcat dumps and bug reports contain your watch's MAC

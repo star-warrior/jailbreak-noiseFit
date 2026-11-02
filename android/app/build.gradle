@@ -1,0 +1,9 @@
+apply plugin: 'com.android.application'
+android {
+    namespace 'com.jay.wfup'
+    compileSdk 34
+    defaultConfig { applicationId "com.jay.wfup"; minSdk 26; targetSdk 34; versionCode 16; versionName "2.5-probe" }
+    buildTypes { release { minifyEnabled false } }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+}
+dependencies { }
