@@ -13,12 +13,15 @@ import android.bluetooth.BluetoothManager;
 import android.bluetooth.BluetoothProfile;
 import android.bluetooth.le.ScanCallback;
 import android.bluetooth.le.ScanResult;
+import android.bluetooth.le.ScanSettings;
+import android.bluetooth.le.BluetoothLeScanner;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -36,16 +39,19 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 public class MainActivity extends Activity {
 
     static final UUID UUID_CCCD = UUID.fromString("00002902-0000-1000-8000-00805F9B34FB");
     /** Shown on every start so the installed APK can be identified from the log alone. */
-    static final String BUILD_TAG = "2.5-probe";
+    static final String BUILD_TAG = "2.6.1-scan-clock";
+    static final int REQ_SCAN = 2;
     static final String SRV_CUST_PREFIX = "16186F00-0000-1000-8000-00807F9B34FB";
     static final String CHR_A = "16186F01-0000-1000-8000-00807F9B34FB";
     static final String CHR_B = "16186F02-0000-1000-8000-00807F9B34FB";
@@ -100,18 +106,37 @@ public class MainActivity extends Activity {
         ScrollView sv = new ScrollView(this); svRef = sv;
         android.widget.LinearLayout col = new android.widget.LinearLayout(this);
         col.setOrientation(android.widget.LinearLayout.VERTICAL); sv.addView(col); setContentView(sv);
-        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        // Tiny focus sink so the MAC field does not grab initial focus and scroll
+        // the column past the section header and SCAN button.
+        android.view.View focusSink = new android.view.View(this);
+        focusSink.setFocusable(true);
+        focusSink.setFocusableInTouchMode(true);
+        col.addView(focusSink, new android.widget.LinearLayout.LayoutParams(1, 1));        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);
 
         /* ---------- 1. connect ---------- */
-        col.addView(section("1  CONNECT TO WATCH"));
+        devHeader = section("1  CONNECT TO WATCH");
+        col.addView(devHeader);
         Button btnScan = new Button(this); btnScan.setText("SCAN"); col.addView(btnScan);
         android.widget.EditText macIn = new android.widget.EditText(this);
         macIn.setHint("or paste watch MAC XX:XX:XX:XX:9F:33");
         macIn.setText("DB:81:C2:15:9F:33");
         macIn.setTextSize(14); col.addView(macIn);
+        sv.postDelayed(() -> {
+            macIn.clearFocus();
+            focusSink.requestFocus();
+            sv.scrollTo(0, 0);
+        }, 400);
         Button btnMac = new Button(this); btnMac.setText("CONNECT BY MAC"); col.addView(btnMac);
-        listDevices = new ListView(this); listDevices.setAdapter(devAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1)); col.addView(listDevices);
+        listDevices = new ListView(this);
+        listDevices.setAdapter(devAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1));
+        // A ListView inside a ScrollView measures to one row unless it gets a fixed
+        // height, so set one explicitly and let it scroll on its own.
+        android.widget.LinearLayout.LayoutParams listLp = new android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                (int) (300 * getResources().getDisplayMetrics().density));
+        listDevices.setLayoutParams(listLp);
+        col.addView(listDevices);
         Button btnRun = new Button(this); btnRun.setText("REPLAY"); col.addView(btnRun);
 
         /* ---------- 2. build from photo ---------- */
@@ -129,19 +154,7 @@ public class MainActivity extends Activity {
         cbBig.setOnCheckedChangeListener((v, c) -> allowBig = c);
         col.addView(cbBig);
 
-        /* ---------- 4. diagnostics ---------- */
-        col.addView(section("4  DIAGNOSTIC TESTS \u00B7 one upload each"));
-        Button btnPlate = new Button(this); btnPlate.setText("PLATE PROBE: sheet backgrounds in colour"); col.addView(btnPlate);
-        Button btnPack = new Button(this); btnPack.setText("PACK REFERENCE (no photo, test packer)"); col.addView(btnPack);
-        Button btnPat = new Button(this); btnPat.setText("TEST PATTERN (colour bars, both images)"); col.addView(btnPat);
-        Button btnBands = new Button(this); btnBands.setText("BANDS: R/G/B artwork, keep clock strip"); col.addView(btnBands);
-        Button btnStrip = new Button(this); btnStrip.setText("STRIP PROBE: magenta/cyan clock strip"); col.addView(btnStrip);
-        Button btnMask = new Button(this); btnMask.setText("STRIP MASK PROBE: blue + keyed glyphs"); col.addView(btnMask);
-        Button btnGrid = new Button(this); btnGrid.setText("STRIP GRID PROBE: 32px cells (atlas map)"); col.addView(btnGrid);
-        Button btnMid = new Button(this); btnMid.setText("BLOCK-3 PROBE: grid in pre-artwork block"); col.addView(btnMid);
-        Button btnGeom = new Button(this); btnGeom.setText("GEOMETRY PROBE: quadrant markers, full screen"); col.addView(btnGeom);
-        Button btnTest = new Button(this); btnTest.setText("TEST COMPILER (offline)"); col.addView(btnTest);
-
+        /* ---------- 4. log ---------- */
         col.addView(section("LOG"));
         logView = new TextView(this);
         logView.setTextSize(12);
@@ -150,10 +163,9 @@ public class MainActivity extends Activity {
         log("WFUP build " + BUILD_TAG);
 
         btnScan.setOnClickListener(v -> {
-            if (checkSelfPermission("android.permission.BLUETOOTH_SCAN") != PackageManager.PERMISSION_GRANTED
-              || checkSelfPermission("android.permission.BLUETOOTH_CONNECT") != PackageManager.PERMISSION_GRANTED
-              || checkSelfPermission("android.permission.ACCESS_FINE_LOCATION") != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(new String[]{"android.permission.BLUETOOTH_SCAN","android.permission.BLUETOOTH_CONNECT","android.permission.ACCESS_FINE_LOCATION"}, 1);
+            if (!hasScanPermissions()) {
+                log("requesting scan permissions (" + permissionState() + ")");
+                requestScanPermissions();
                 return;
             }
             startScan();
@@ -173,9 +185,6 @@ public class MainActivity extends Activity {
             if (dev != null) connect(dev);
         });
         btnRun.setOnClickListener(v -> { if (!running) runReplay(); });
-        btnTest.setOnClickListener(v -> {
-            WFCompilerRunner.run(s -> log("COMP " + s), getFilesDir());
-        });
         btnPhoto.setOnClickListener(v -> {
             Intent i = new Intent(Intent.ACTION_GET_CONTENT);
             i.setType("image/*");
@@ -185,7 +194,6 @@ public class MainActivity extends Activity {
         });
         btnRecrop.setOnClickListener(v -> openCropDialog());
         btnUp.setOnClickListener(v -> uploadBuilt());
-        btnPlate.setOnClickListener(v -> buildPlateProbe());
         btnBleed.setOnClickListener(v -> buildFullBleedFace());
     }
 
@@ -490,10 +498,10 @@ public class MainActivity extends Activity {
         final byte[] base = loadBaseBlob();
         if (base == null) return;
         final Bitmap src = photo;
-        log("building full bleed (photo behind the clock)...");
+        log("building full bleed (photo behind the clock, cells repainted)...");
         new Thread(() -> {
             long t0 = System.nanoTime();
-            final FacePipeline.Built b = FacePipeline.buildFullBleed(src, base);
+            final FacePipeline.Built b = FacePipeline.buildFullBleedWithClock(src, base);
             final long ms = (System.nanoTime() - t0) / 1_000_000;
             runOnUiThread(() -> {
                 for (String line : b.report.split("\n")) if (!line.isEmpty()) log(line);
@@ -779,36 +787,228 @@ public class MainActivity extends Activity {
         StringBuilder sb = new StringBuilder();
         for (int k = Math.max(0, ls.length - 12); k < ls.length; k++) sb.append(ls[k]).append('\n');
         logView.setText(sb);
-        if (svRef != null) svRef.post(() -> svRef.fullScroll(android.view.View.FOCUS_DOWN));
+        if (svRef != null) svRef.post(() -> {
+            // Only follow the log when the user is already at the bottom. Otherwise
+            // a startup/scan line would yank the page away from the SCAN button.
+            android.view.View child = svRef.getChildAt(0);
+            int max = child == null ? 0 : Math.max(0, child.getHeight() - svRef.getHeight());
+            if (svRef.getScrollY() >= max - 200) svRef.fullScroll(android.view.View.FOCUS_DOWN);
+        });
     }); }
 
+    /* ---- BLE scan ---- */
+    static final int SCAN_MS = 15000;
     boolean scanning = false;
-    final ScanCallback scanCb = new ScanCallback() {
-        @SuppressLint("MissingPermission") public void onScanResult(int ct, ScanResult r) {
-            BluetoothDevice d = r.getDevice();
-            String name = (d.getName() == null ? "(unknown)" : d.getName()) + " " + d.getAddress();
-            if (!found.containsKey(name)) { found.put(name, d); devAdapter.add(name); }
+    int scanGen = 0;
+    final HashSet<String> foundAddrs = new HashSet<>();
+    final List<String> labelOrder = new ArrayList<>();
+    TextView devHeader;
+
+    static boolean granted(Activity a, String p) {
+        return a.checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /** API 31+ needs only the Nearby devices pair. API 30 and below needs location. */
+    boolean hasScanPermissions() {
+        if (Build.VERSION.SDK_INT >= 31) {
+            return granted(this, "android.permission.BLUETOOTH_SCAN")
+                    && granted(this, "android.permission.BLUETOOTH_CONNECT");
         }
-        @Override public void onScanFailed(int errorCode) { log("scan FAILED code=" + errorCode); }
+        return granted(this, "android.permission.ACCESS_FINE_LOCATION");
+    }
+
+    String permWord(String p) { return granted(this, p) ? "granted" : "denied"; }
+
+    String permissionState() {
+        if (Build.VERSION.SDK_INT >= 31) {
+            return "scan " + permWord("android.permission.BLUETOOTH_SCAN")
+                    + ", connect " + permWord("android.permission.BLUETOOTH_CONNECT");
+        }
+        return "location " + permWord("android.permission.ACCESS_FINE_LOCATION");
+    }
+
+    void requestScanPermissions() {
+        if (Build.VERSION.SDK_INT >= 31) {
+            requestPermissions(new String[]{
+                    "android.permission.BLUETOOTH_SCAN",
+                    "android.permission.BLUETOOTH_CONNECT"}, REQ_SCAN);
+        } else {
+            requestPermissions(new String[]{
+                    "android.permission.ACCESS_FINE_LOCATION"}, REQ_SCAN);
+        }
+    }
+
+    @Override public void onRequestPermissionsResult(int req, String[] perms, int[] res) {
+        super.onRequestPermissionsResult(req, perms, res);
+        if (req != REQ_SCAN) return;
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < perms.length; i++) {
+            sb.append(perms[i].substring(perms[i].lastIndexOf('.') + 1))
+              .append('=')
+              .append(i < res.length && res[i] == PackageManager.PERMISSION_GRANTED ? "granted" : "denied")
+              .append(' ');
+        }
+        log("permission result: " + sb);
+        if (hasScanPermissions()) {
+            startScan();
+        } else {
+            log("scan blocked: allow Nearby devices (Android 12+) or Location (Android 11-) in app settings");
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    String safeName(BluetoothDevice d) {
+        try { return d.getName(); } catch (Exception e) { return null; }
+    }
+
+    /** All device-list mutations happen on the UI thread. */
+    void addFound(BluetoothDevice d, String name, Integer rssi, String source) {
+        if (d == null) return;
+        final String addr;
+        try { addr = d.getAddress(); } catch (Exception e) { return; }
+        final String label = ((name == null || name.isEmpty()) ? "(unknown)" : name) + "  " + addr
+                + (rssi == null || rssi == 127 ? "" : "  " + rssi + " dBm")
+                + (source == null ? "" : "  [" + source + "]");
+        h.post(() -> {
+            if (!foundAddrs.add(addr)) return;
+            found.put(label, d);
+            labelOrder.add(label);
+            refreshDeviceList();
+            log("device " + label);
+        });
+    }
+
+    /** Watches first, then other bonded devices, then scan-only hits. */
+    static int devRank(String label) {
+        String u = label.toUpperCase(java.util.Locale.US);
+        if (u.contains("NOISEFIT") || u.contains("HALO")) return 0;
+        if (u.contains("[BONDED]")) return 1;
+        return 2;
+    }
+
+    /** Resorts into the adapter and refreshes the count in the section header. */
+    void refreshDeviceList() {
+        List<String> sorted = new ArrayList<>(labelOrder);
+        java.util.Collections.sort(sorted, (a, b) -> {
+            int ra = devRank(a), rb = devRank(b);
+            return ra != rb ? ra - rb : a.compareToIgnoreCase(b);
+        });
+        devAdapter.clear();
+        devAdapter.addAll(sorted);
+        if (devHeader != null) {
+            devHeader.setText("1  CONNECT TO WATCH \u00b7 " + foundAddrs.size() + " found"
+                    + (scanning ? " \u00b7 scanning\u2026" : ""));
+        }
+    }
+
+    static String scanError(int code) {
+        switch (code) {
+            case 1: return "already started";
+            case 2: return "application registration failed";
+            case 3: return "internal error";
+            case 4: return "feature unsupported";
+            case 5: return "out of resources";
+            case 6: return "scanning too frequently";
+            default: return "unknown";
+        }
+    }
+
+    final ScanCallback scanCb = new ScanCallback() {
+        @SuppressLint("MissingPermission") @Override public void onScanResult(int ct, ScanResult r) {
+            if (r == null || r.getDevice() == null) return;
+            String name = null;
+            try { if (r.getScanRecord() != null) name = r.getScanRecord().getDeviceName(); }
+            catch (Exception ignored) {}
+            if (name == null || name.isEmpty()) name = safeName(r.getDevice());
+            addFound(r.getDevice(), name, r.getRssi(), null);
+        }
+
+        @SuppressLint("MissingPermission") @Override public void onBatchScanResults(List<ScanResult> results) {
+            if (results == null) return;
+            for (ScanResult r : results) {
+                if (r == null || r.getDevice() == null) continue;
+                String name = null;
+                try { if (r.getScanRecord() != null) name = r.getScanRecord().getDeviceName(); }
+                catch (Exception ignored) {}
+                if (name == null || name.isEmpty()) name = safeName(r.getDevice());
+                addFound(r.getDevice(), name, r.getRssi(), null);
+            }
+        }
+
+        @Override public void onScanFailed(int errorCode) {
+            log("scan FAILED code=" + errorCode + " (" + scanError(errorCode) + ")");
+            scanning = false;
+            h.post(MainActivity.this::refreshDeviceList);
+        }
     };
 
     @SuppressLint("MissingPermission")
-    void startScan() {
-        found.clear(); devAdapter.clear();
-        BluetoothAdapter ad = ((BluetoothManager)getSystemService(Context.BLUETOOTH_SERVICE)).getAdapter();
+    void addBonded(BluetoothAdapter ad) {
         try {
-            if (ad == null || ad.getState() != BluetoothAdapter.STATE_ON) { log("bluetooth not ready yet"); return; }
-            android.bluetooth.le.ScanSettings st = new android.bluetooth.le.ScanSettings.Builder()
-                .setScanMode(android.bluetooth.le.ScanSettings.SCAN_MODE_LOW_LATENCY).build();
-            ad.getBluetoothLeScanner().startScan(null, st, scanCb);
+            Set<BluetoothDevice> bonded = ad.getBondedDevices();
+            int n = 0;
+            if (bonded != null) {
+                for (BluetoothDevice d : bonded) {
+                    addFound(d, safeName(d), null, "bonded");
+                    n++;
+                }
+            }
+            log("bonded devices: " + n);
+        } catch (Exception e) {
+            log("bonded list error: " + e);
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    void startScan() {
+        if (!hasScanPermissions()) { log("scan blocked, permissions missing"); return; }
+        if (scanning) { log("scan already running"); return; }
+
+        found.clear();
+        foundAddrs.clear();
+        labelOrder.clear();
+        devAdapter.clear();
+
+        BluetoothManager bm = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
+        BluetoothAdapter ad = bm == null ? null : bm.getAdapter();
+        if (ad == null) { log("no bluetooth adapter"); return; }
+        if (!ad.isEnabled()) {
+            log("bluetooth is OFF - turn it on, then scan again");
+            try { startActivity(new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)); }
+            catch (Exception e) { log("enable prompt failed: " + e); }
+            return;
+        }
+        BluetoothLeScanner sc = ad.getBluetoothLeScanner();
+        if (sc == null) { log("BLE scanner unavailable"); return; }
+
+        addBonded(ad);
+
+        final int gen = ++scanGen;
+        try {
+            ScanSettings st = new ScanSettings.Builder()
+                    .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                    .build();
+            sc.startScan(null, st, scanCb);
             scanning = true;
-            log("scan started...");
-            h.postDelayed(new Runnable() { public void run() {
-                try { ad.getBluetoothLeScanner().stopScan(scanCb); } catch(Exception e){ log("stop scan err " + e); }
+            refreshDeviceList();
+            log("scan started for " + (SCAN_MS / 1000) + "s (" + permissionState() + ")");
+            h.postDelayed(() -> {
+                if (gen != scanGen || !scanning) return;
+                try { sc.stopScan(scanCb); } catch (Exception e) { log("stop scan: " + e); }
                 scanning = false;
+                refreshDeviceList();
                 log("scan over, " + found.size() + " devices");
-            }}, 12000);
-        } catch (Exception e) { log("scan err " + e); scanning = false; }
+                if (found.isEmpty()) {
+                    log("no BLE devices: keep the watch awake/in pairing mode, force-stop com.noisefit, or use CONNECT BY MAC");
+                }
+            }, SCAN_MS);
+        } catch (SecurityException e) {
+            log("scan permission error: " + e.getMessage());
+            scanning = false;
+        } catch (Exception e) {
+            log("scan error: " + e);
+            scanning = false;
+        }
     }
 
     @SuppressLint("MissingPermission")

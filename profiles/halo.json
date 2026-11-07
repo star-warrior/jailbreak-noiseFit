@@ -1,7 +1,7 @@
 {
   "model": "NoiseFit Halo",
   "profile_version": 2,
-  "profile_status": "transport-verified, container-verified, layout-verified, rendering-verified-with-open-cell-background",
+  "profile_status": "transport-verified, container-verified, layout-verified, rendering-verified, full-bleed-verified, per-widget-sheets-built",
   "notes": "Verified on one Halo and one Android phone. Values here are measured, not copied. Any other NoiseFit model must be re-measured with its own capture.",
 
   "display": {
@@ -23,6 +23,7 @@
   "container": {
     "magic": "afafaf02",
     "uncompressed_size": 754368,
+    "built_blob_bytes": 1078368,
     "block_count": 185,
     "block_bytes": 4096,
     "header_size_formula": "26 + 2 * block_count",
@@ -133,13 +134,25 @@
       "status": "verified"
     },
     "glyph_atlas": {
-      "range_start": 627616,
-      "range_end": 754368,
-      "content": "date cells, digit cells, colon cells, AM/PM",
-      "cell_format": "packed RGB565, w*h*2 per digit",
+      "reference_range": [627616, 754368],
+      "reference_content": "32-byte pad, date 4 cells, one shared digit sheet 10 cells, colon 1 cell",
+      "cell_format": "packed RGB565, w*h*2 per cell",
       "colour": "baked into sheet",
-      "background": "opaque black",
-      "status": "verified-structure, open-background"
+      "background": "baked into sheet and blitted opaque",
+      "builder_layout": {
+        "pad": [627616, 627648],
+        "date": [627648, 642048],
+        "digit_sheets": [
+          [642048, 750048],
+          [750048, 858048],
+          [858048, 966048],
+          [966048, 1074048]
+        ],
+        "colon": [1074048, 1078368],
+        "total_blob_bytes": 1078368,
+        "rule": "one sheet per widget; every cell holds the photo patch at that widget's screen rect with the stock glyph composited over it"
+      },
+      "status": "verified-structure, per-widget-sheets-built"
     },
     "screen_composition": {
       "rows_0_135": "mid block",
@@ -158,6 +171,15 @@
     { "x": 322, "y": 69, "w": 60, "h": 90, "kind": "digit", "sheet_offset": 642048, "sheet_bytes": 108000 }
   ],
 
+  "generated_widget_table_full_bleed": [
+    { "x": 204, "y": 23, "w": 60, "h": 30, "kind": "date", "sheet_offset": 627648, "sheet_bytes": 14400 },
+    { "x": 86, "y": 69, "w": 60, "h": 90, "kind": "digit", "sheet_offset": 642048, "sheet_bytes": 108000 },
+    { "x": 154, "y": 69, "w": 60, "h": 90, "kind": "digit", "sheet_offset": 750048, "sheet_bytes": 108000 },
+    { "x": 222, "y": 69, "w": 24, "h": 90, "kind": "colon", "sheet_offset": 1074048, "sheet_bytes": 4320 },
+    { "x": 254, "y": 69, "w": 60, "h": 90, "kind": "digit", "sheet_offset": 858048, "sheet_bytes": 108000 },
+    { "x": 322, "y": 69, "w": 60, "h": 90, "kind": "digit", "sheet_offset": 966048, "sheet_bytes": 108000 }
+  ],
+
   "evidence": {
     "capture": "Docs/btsnoop_hci.log",
     "transcript": "Docs/wf_transcript.txt",
@@ -168,7 +190,7 @@
   },
 
   "open_issues": [
-    "glyph cells store an opaque black backing, visible as boxes over a photo",
+    "on-watch confirmation of the 1078368-byte per-widget-sheet blob is pending",
     "widget record fields beyond x/y/w/h/kind/sheet are unmapped",
     "metadata widgets (steps/day/battery) require a larger atlas",
     "no other NoiseFit model has been tested"

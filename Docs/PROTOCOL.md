@@ -2,7 +2,7 @@
 
 Everything below is measured from real, accepted transfers and cross-checked
 against the vendor code in `noisefit_base.apk`. The framing is **byte-exact**: the
-generator in `android/app/src/main/java/com/jay/wfup/ReplayBuilder.java`
+generator in `uploader/app/src/main/java/com/jay/wfup/ReplayBuilder.java`
 reproduces all 302 data writes of the original capture identically, and the
 container section was verified by reconstructing all 50 287 stream bytes from that
 capture.
@@ -141,9 +141,9 @@ of exactly that failure is in the same snoop file.
 ### Size limit
 
 The container length in window 1 is a u32, so the framing itself has no 64 KB
-limit. A 274 013 B vendor face transfers fine, and the app has built and uploaded
-containers of several hundred kilobytes. The app keeps a sanity gate at 400 000 B
-with an explicit override.
+limit. A 274 013 B vendor face transfers fine, and a 1 001 544 B vendor face also
+transfers. The per-widget-sheet Halo blob is 1 078 368 B; the app keeps a sanity
+gate at 2 000 000 B with an explicit override.
 
 ## 4. Container format (`afafaf02`)
 
@@ -221,11 +221,36 @@ Screen composition, 1:1 with no scaling:
 ```
 screen rows   0 .. 135   <- mid block, 466x136 image
 screen rows 136 .. 465   <- artwork block, 466x330 image
-screen (all rows)        <- sprite sheets blitted over the top by the firmware
+screen (all rows)        <- sprite sheets blitted opaque over the top by firmware
 ```
 
 330 + 136 = 466, so a full-bleed face splits a 466x466 image at row 136: rows
 0..135 go to the mid block, rows 136..465 to the artwork.
+
+### 5.1 Builder blob with per-widget sheets (1 078 368 B)
+
+The stock blob keeps one shared digit sheet, so a photo behind the clock cannot
+show through the cells. The app rebuilds the atlas with one sheet per widget and
+paints the photo patch from that widget's screen rect into every cell (glyph
+composited over it by max RGB channel as alpha). This makes the blob larger but
+keeps it a normal blob: only the atlas offset and the six sheet offsets change.
+
+| range                 | size      | content                                   |
+| --------------------- | --------- | ----------------------------------------- |
+| `0 .. 627616`         | 627 616   | header, preview, mid block, artwork       |
+| `627616 .. 627648`    | 32        | atlas pad, copied unchanged               |
+| `627648 .. 642048`    | 14 400    | date sheet, 4 cells of 60x30              |
+| `642048 .. 750048`    | 108 000   | digit sheet #1, 10 cells of 60x90         |
+| `750048 .. 858048`    | 108 000   | digit sheet #2                            |
+| `858048 .. 966048`    | 108 000   | digit sheet #3                            |
+| `966048 .. 1074048`   | 108 000   | digit sheet #4                            |
+| `1074048 .. 1078368`  | 4 320     | colon sheet, 1 cell of 24x90              |
+
+Total: `627616 + 32 + 14400 + 4*108000 + 4320 = 1 078 368` bytes. The six widget
+records point at `627648`, `642048`, `750048`, `858048`, `966048`
+(digits, in table order) and `1074048`. The container packs and round-trips at
+this size; on-watch transfer of a blob this large is still being confirmed.
+
 
 ## 6. Config header and widget table
 
@@ -241,7 +266,7 @@ u16 y      screen y
 u16 w      screen width
 u16 h      screen height
 u8  kind   4 = date row, 10 = digit, 1 = colon
-u32 sheet  byte offset of this widget's glyph sprite sheet in the blob
+u32 sheet  byte offset of this widget's glyph sprite sheet in the blob, big endian
 ```
 
 Face A (reference face, `10:37` style) decodes to:
@@ -269,11 +294,17 @@ The vendor APK itself documents the intended schema:
 `font_color`, `font_bkcolor`, `font_type`, `font_size`, `align`, `alpha`, `zorder`.
 So positions, colours, sizes and backgrounds are config, not firmware.
 
-Open issue: the sprite cells are stored with a black background and are currently
-drawn as visible black boxes over a photo. The next experiment distinguishes
-"cells blitted opaque" (fix: per-widget sheets with the photo painted into the cell
-background) from "background drawn from a config field" (fix: the `font_bkcolor`
-equivalent in the 514-byte header).
+Open issue resolved: the sprite cells are stored with their own background and are
+blitted **opaque**; the firmware does not key out a colour or use a config
+background. A probe that painted the stock cells red/green/blue showed those
+colours on the watch, and replacing the atlas with solid cells turned the digits
+into solid boxes. The fix is the per-widget atlas described in section 5.1: paint
+the photo patch for each widget's screen rect into every cell of that widget's own
+sheet, then composite the stock glyph over it.
+
+The `font_bkcolor` field in the vendor template is therefore used by the vendor
+compiler to bake the background into the sheet, not read by the firmware at
+runtime.
 
 ## 7. Building a face offline
 
@@ -284,7 +315,8 @@ equivalent in the 514-byte header).
    screen so the thumbnail matches the watch)
 4. convert the screen to RGB565 **big endian**
 5. splice: rows 0..135 into the mid block, rows 136..465 into the artwork
-6. leave the config header and the sprite sheets untouched
+6. rebuild the glyph atlas: one sheet per widget, each cell = photo patch at that
+   widget's rect with the stock glyph composited over it (section 5.1)
 7. split the blob into 4096-byte blocks, LZO1X each, build the dynamic header
 8. compute both vendor checksums
 9. self-check by decompressing the container and comparing every byte
@@ -299,11 +331,13 @@ All of this runs in the Android app (`CropView`, `FacePipeline`, `FaceBuilder`,
 * SOLVED: the container header is dynamic (`26 + 2n`), not fixed 396 bytes.
 * SOLVED: pixels are RGB565 **big endian**.
 * SOLVED: the clock bar is a stored image in the mid block; the atlas holds sprites.
-* OPEN: the black boxes around time/AM-PM cells over a photo (see section 6).
+* SOLVED: the black boxes around time/date/AM-PM cells. Cells are blitted opaque;
+  the builder now gives every widget its own sheet with the photo painted in.
+* OPEN: on-watch confirmation of the 1 078 368-byte per-widget-sheet blob.
 * OPEN: the widget record's remaining fields; only x/y/w/h/kind/sheet are mapped.
 * OPEN: the container's type field (`0214` vs `0203`) and whether it gates layout.
 * OPEN: whether fields 8/16 are validated by the watch. The cloud face's values do
   not match the vendor function, which suggests not, but DIY uploads use the
   function and are accepted, so it is implemented properly.
-* OPEN: larger blobs with extra sprite sheets - untested whether the firmware
-  accepts a blob beyond the reference sizes.
+* OPEN: even larger blobs with additional sheets - the length field is u32 and the
+  1 001 544-byte vendor blob transfers fine, but untested beyond the new size.

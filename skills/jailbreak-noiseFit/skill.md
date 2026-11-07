@@ -197,6 +197,10 @@ The NoiseFit Halo reference values are shown below. For any other model, treat t
 | Checksums         | field 8 = blob checksum, field 16 = payload checksum   |
 | Trailer           | `crc32(prefix22 \|\| container)`, little endian, zlib CRC32 |
 
+The Halo builder with per-widget glyph sheets produces a 1 078 368-byte blob, so
+`block_count` rises to 264 and the header to `26 + 2*264 = 554` bytes. Recompute
+both from the actual blob; do not hard-code the stock counts.
+
 Method for discovering fields:
 
 1. Find the width x height x bytes-per-pixel number in the header. That anchors the uncompressed size.
@@ -304,7 +308,7 @@ All model-specific values go in a profile file, one per watch model, for example
 ```json
 {
   "model": "NoiseFit Halo",
-  "profile_status": "transport-verified, container-verified, layout-verified, rendering-verified-with-open-cell-background",
+  "profile_status": "transport-verified, container-verified, layout-verified, rendering-verified, full-bleed-verified, per-widget-sheets-built",
   "display": {
     "width": 466,
     "height": 466,
@@ -359,6 +363,8 @@ All model-specific values go in a profile file, one per watch model, for example
     "mid_block": [192714, 320056],
     "artwork": [320056, 627616],
     "glyph_atlas": [627616, 754368],
+    "builder_blob_bytes": 1078368,
+    "glyph_atlas_builder": "32-byte pad then one sheet per widget; each cell holds the photo patch at that widget's screen rect with the stock glyph composited over it",
     "pixels": "RGB565 big endian, stride width * 2",
     "screen_rows": "0-135 mid block, 136-465 artwork, sprites on top"
   },
@@ -582,9 +588,11 @@ Current Halo-specific facts worth carrying into a new port:
 - the vendor APK documents the intended schema in
   `assets/dial/style/OSW-802N/template1..4.json` (`textbox`, `font_color`,
   `font_bkcolor`, `font_size`, `align`, `alpha`, `zorder`);
-- the open cosmetic issue is the opaque black backing in the glyph cells. The
-  `PLATE PROBE` build paints the sheet backgrounds to decide whether the firmware
-  blits cells opaque or fills a config rectangle. Do not claim it is fixed.
+- glyph cells are blitted **opaque**. A plate probe painted the stock cells
+  red/green/blue and the watch showed those colours. The fix is one sheet per
+  widget, with the photo patch for that widget's rect painted into every cell and
+  the stock glyph composited over it. The Halo builder blob is 1 078 368 B;
+  on-watch confirmation of that size is still pending.
 
 ## 11. How to talk to the user
 

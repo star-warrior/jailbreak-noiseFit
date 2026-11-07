@@ -22,11 +22,12 @@ write sequence the official app uses.
 | Photo → face on phone | **Verified** | Photo renders with correct colours, correct orientation and a live clock |
 | Full-bleed geometry | **Verified** | Photo is continuous across the clock bar / artwork seam, no scaling or offset |
 | Square crop dialog | **Verified** | Drag and pinch, nothing squashed to fit |
-| Clock cell backgrounds | **Open** | Glyph cells carry a black backing that shows as boxes over a photo |
+| Clock cell backgrounds | **Fixed, watch check pending** | Each widget now gets its own glyph sheet with the photo painted into every cell, so the cells blit the photo instead of a black box |
 | Other models | **Untested** | Only the Halo, on one phone, has been exercised |
 
-Photo face max size seen in practice: a few hundred kilobytes per container after
-LZO1X. The app keeps a 400 000 B sanity gate with an explicit override.
+Photo face size: the stock blob is 754 368 B and the per-widget-sheet build is
+1 078 368 B before LZO1X. The app keeps a 2 000 000 B sanity gate with an explicit
+override.
 
 ---
 
@@ -238,10 +239,10 @@ the 754368-byte one from `android/app/src/main/assets/blob.bin`.
 
 ## Open problems
 
-1. **Clock cell backgrounds.** Sprite cells carry a black backing; over a photo it
-   shows as black boxes around time, date and AM-PM. Probe tooling is in place;
-   the fix is either per-position sheets with the photo painted into the cell
-   background, or a config field if the firmware fills the widget rect itself.
+1. **On-watch confirmation of per-widget sheets.** Sprite cells are blitted
+   opaque; the builder now gives every widget its own sheet with the photo patch
+   painted into each cell. The 1 078 368-byte blob packs and round-trips; the
+   final watch check is pending.
 2. **Widget record fields.** Only `x, y, w, h, kind, sheet` are decoded. Sizes,
    colours and background alpha for non-time widgets are still unknown.
 3. **Metadata widgets.** Faces that show steps, battery, heart rate or weekday use

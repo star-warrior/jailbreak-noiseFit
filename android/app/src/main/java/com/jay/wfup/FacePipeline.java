@@ -24,13 +24,14 @@ public final class FacePipeline {
     /**
      * Sanity cap only. The BLE length field is a u32 and the vendor's own face with a
      * 1001544 byte blob transfers fine, so there is no 65535 limit; this just stops a
-     * runaway build from streaming forever.
+     * runaway build from streaming forever. The per-widget glyph sheets push the raw
+     * blob to 1078368 bytes, so the cap has to sit above that.
      */
-    public static final int LIMIT = 400000;
+    public static final int LIMIT = 2000000;
 
     /**
      * Kept as a ladder so a pathological photo can still be shrunk, but with the
-     * 400000 byte cap the first (lossless quality) rung always fits, so the loop
+     * 2000000 byte cap the first (lossless quality) rung always fits, so the loop
      * stops there and no colour quantisation is ever applied.
      */
     public static final int[] LADDER = {8, 6, 5, 4};
@@ -151,6 +152,19 @@ public final class FacePipeline {
      * (screen rows 136..465), and the glyph atlas at the end of it (left stock).
      */
     public static Built buildFullBleed(Bitmap src, byte[] base) {
+        return buildFullBleed(src, base, false);
+    }
+
+    /**
+     * Full bleed with the clock/date sprite sheets rebuilt: every cell background is
+     * painted from the photo under that widget, so the firmware's opaque blit no longer
+     * shows black boxes. The stock glyph pixels stay, blended by their own luminance.
+     */
+    public static Built buildFullBleedWithClock(Bitmap src, byte[] base) {
+        return buildFullBleed(src, base, true);
+    }
+
+    private static Built buildFullBleed(Bitmap src, byte[] base, boolean clockBackgrounds) {
         Built out = new Built();
         if (src == null) { out.error = "no image"; return out; }
         if (base == null || base.length != FaceBuilder.BLOB_SIZE) {
@@ -174,6 +188,15 @@ public final class FacePipeline {
         System.arraycopy(screen565, bandBytes, blob, FaceBuilder.OFF_BG, artBytes);
         System.arraycopy(pv565, 0, blob, FaceBuilder.OFF_PREVIEW, FaceBuilder.LEN_PREVIEW);
 
+        if (clockBackgrounds) {
+            try {
+                blob = FaceBuilder.repaintWidgets(blob, screen);
+            } catch (RuntimeException e) {
+                out.error = "clock sheets: " + e.getMessage();
+                return out;
+            }
+        }
+
         FaceBuilder.Result r = FaceBuilder.pack(base, blob);
         if (!r.ok()) { out.error = r.error; return out; }
 
@@ -182,9 +205,12 @@ public final class FacePipeline {
         out.blob = blob;
         out.bits = 8;
         out.fits = r.container.length <= LIMIT;
-        out.report = "full bleed: photo 466x466 across the whole screen, glyph atlas untouched"
+        out.report = (clockBackgrounds
+                    ? "full bleed: photo 466x466, clock/date sheet cells repainted from the photo"
+                    : "full bleed: photo 466x466 across the whole screen, glyph atlas untouched")
                 + "\nclock bar background " + bandBytes + "B at " + FaceBuilder.OFF_MID
                 + ", artwork " + artBytes + "B at " + FaceBuilder.OFF_BG
+                + "\nblob " + blob.length + "B"
                 + "\ncontainer " + r.container.length + "B, payload " + r.compressedSize + "B"
                 + "\nselfcheck: " + check + "\n";
         if (!check.startsWith("OK")) out.error = "self check failed: " + check;
