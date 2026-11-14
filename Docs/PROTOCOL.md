@@ -201,8 +201,9 @@ a plain row-major image with stride `width * 2`.
 | ------------------- | ------- | ---------------------------------------------------- |
 | `0 .. 514`          | 514     | config header: widget table, layout, firmware fields  |
 | `514 .. 192714`     | 192 200 | preview 310x310 (face-list thumbnail only)            |
-| `192714 .. 320056`  | 127 342 | clock-bar background, 466x136 image + 590-byte tail   |
-| `320056 .. 627616`  | 307 560 | artwork 466x330 (the lower part of the round screen)  |
+| `192714 .. 193304`  | 590     | mid-block prefix header (zeros in the stock blob)     |
+| `193304 .. 320056`  | 126 752 | screen rows 0..135, 466x136 (the top band)            |
+| `320056 .. 627616`  | 307 560 | screen rows 136..465, 466x330 (the lower part)        |
 | `627616 .. 754368`  | 126 752 | glyph sprite sheets (date, digits, colon, AM/PM)      |
 
 This was proven on hardware, one region at a time:
@@ -210,7 +211,9 @@ This was proven on hardware, one region at a time:
 * Replacing only the preview changes nothing on the watch - it is the face-list
   thumbnail.
 * Painting the mid block with a grid lights the clock-bar background up and leaves
-  the digits crisp. So the bar is a stored image, not a firmware rectangle.
+  the digits crisp. So the bar is a stored image, not a firmware rectangle. The grid
+  must start at `OFF_MID + 590`: the 590 head bytes of the block are a prefix header,
+  not a tail, so image writes at `OFF_MID` shift every row by 295 pixels.
 * Replacing the artwork rows only affects the lower 330 screen rows; the clock keeps
   working.
 * Replacing the atlas turns digits into solid cells; keeping it stock keeps the time
@@ -219,7 +222,7 @@ This was proven on hardware, one region at a time:
 Screen composition, 1:1 with no scaling:
 
 ```
-screen rows   0 .. 135   <- mid block, 466x136 image
+screen rows   0 .. 135   <- mid block, image starts after its 590-byte header
 screen rows 136 .. 465   <- artwork block, 466x330 image
 screen (all rows)        <- sprite sheets blitted opaque over the top by firmware
 ```

@@ -147,8 +147,8 @@ public final class FacePipeline {
      * the untouched glyph atlas, so the time keeps working and the digits sit straight
      * on the photo.
      *
-     * Screen is stored as three pieces: the clock bar's background in the mid block at
-     * {@link FaceBuilder#OFF_MID}, the artwork in the first rows of the background block
+     * Screen is stored as three pieces: the top 136 rows in the mid block (after its
+     * 590 byte header), the artwork in the first rows of the background block
      * (screen rows 136..465), and the glyph atlas at the end of it (left stock).
      */
     public static Built buildFullBleed(Bitmap src, byte[] base) {
@@ -182,8 +182,9 @@ public final class FacePipeline {
         byte[] pv565 = FaceBuilder.toRgb565(pvPx, PV_W, PV_H);
 
         byte[] blob = base.clone();
-        // screen rows 0..135 -> the clock bar background block
-        System.arraycopy(screen565, 0, blob, FaceBuilder.OFF_MID, bandBytes);
+        // screen rows 0..135 -> mid block, after its 590 byte header. The image ends
+        // exactly where OFF_BG starts, so the top and lower halves stay continuous.
+        System.arraycopy(screen565, 0, blob, FaceBuilder.OFF_MID_IMAGE, bandBytes);
         // screen rows 136..465 -> the artwork rows
         System.arraycopy(screen565, bandBytes, blob, FaceBuilder.OFF_BG, artBytes);
         System.arraycopy(pv565, 0, blob, FaceBuilder.OFF_PREVIEW, FaceBuilder.LEN_PREVIEW);
@@ -208,7 +209,8 @@ public final class FacePipeline {
         out.report = (clockBackgrounds
                     ? "full bleed: photo 466x466, clock/date sheet cells repainted from the photo"
                     : "full bleed: photo 466x466 across the whole screen, glyph atlas untouched")
-                + "\nclock bar background " + bandBytes + "B at " + FaceBuilder.OFF_MID
+                + "\nclock bar background " + bandBytes + "B at " + FaceBuilder.OFF_MID_IMAGE
+                + " (after " + FaceBuilder.MID_PREFIX + "B header)"
                 + ", artwork " + artBytes + "B at " + FaceBuilder.OFF_BG
                 + "\nblob " + blob.length + "B"
                 + "\ncontainer " + r.container.length + "B, payload " + r.compressedSize + "B"

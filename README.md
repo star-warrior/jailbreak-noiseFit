@@ -160,8 +160,9 @@ The header is dynamic. The tail appended at transfer time is
 | --- | --- |
 | `0 .. 514` | config header, including the widget table |
 | `514 .. 192714` | preview 310×310, face-list thumbnail only |
-| `192714 .. 320056` | clock-bar background, 466×136 image + 590-byte tail |
-| `320056 .. 627616` | artwork 466×330, lower part of the round screen |
+| `192714 .. 193304` | mid-block prefix header, zeros in the stock blob |
+| `193304 .. 320056` | screen rows 0..135, 466×136 top band |
+| `320056 .. 627616` | screen rows 136..465, 466×330 lower part of the round screen |
 | `627616 .. 754368` | glyph sprite sheets (date, digits, colon, AM-PM) |
 
 Pixels are **RGB565 big endian**, stride `width * 2`. Screen composition is 1:1:

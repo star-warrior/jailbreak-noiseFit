@@ -222,8 +222,9 @@ Reference face A, 754 368 bytes. All pixel data is **RGB565 big endian**, stride
 | --- | --- | --- |
 | `0 .. 514` | 514 | config header, widget table at `0x180` |
 | `514 .. 192714` | 192 200 | preview 310×310 |
-| `192714 .. 320056` | 127 342 | clock-bar background 466×136 + 590-byte tail |
-| `320056 .. 627616` | 307 560 | artwork 466×330 |
+| `192714 .. 193304` | 590 | mid-block prefix header |
+| `193304 .. 320056` | 126 752 | screen rows 0..135 (466×136) |
+| `320056 .. 627616` | 307 560 | screen rows 136..465 (466×330) |
 | `627616 .. 754368` | 126 752 | glyph sprite sheets |
 
 Each region was proven independently by replacing it with a grid or solid pattern

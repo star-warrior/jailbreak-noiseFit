@@ -50,7 +50,7 @@ public class MainActivity extends Activity {
 
     static final UUID UUID_CCCD = UUID.fromString("00002902-0000-1000-8000-00805F9B34FB");
     /** Shown on every start so the installed APK can be identified from the log alone. */
-    static final String BUILD_TAG = "2.6.1-scan-clock";
+    static final String BUILD_TAG = "2.7.0-midfix";
     static final int REQ_SCAN = 2;
     static final String SRV_CUST_PREFIX = "16186F00-0000-1000-8000-00807F9B34FB";
     static final String CHR_A = "16186F01-0000-1000-8000-00807F9B34FB";
@@ -611,7 +611,8 @@ public class MainActivity extends Activity {
         builtContainer = r.container;
         builtFits = r.container.length <= FacePipeline.LIMIT;
         log("mid probe built: " + r.container.length + "B, grid into block at "
-                + FaceBuilder.OFF_MID + " (" + w + "x" + h + " + " + (FaceBuilder.MID_SIZE - FaceBuilder.LEN_MID) + "B tail)");
+                + FaceBuilder.OFF_MID_IMAGE + " (" + w + "x" + h + " after "
+                + FaceBuilder.MID_PREFIX + "B header)");
         log("red = column 0.." + (cols - 1) + ", green = row 0.." + (rows - 1) + "; atlas + artwork stock");
         log("upload, then look at the clock bar background");
     }

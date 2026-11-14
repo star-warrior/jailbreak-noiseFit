@@ -361,6 +361,8 @@ All model-specific values go in a profile file, one per watch model, for example
     "widget_record": "u16 x, y, w, h; u8 kind; u32 sheet_offset",
     "preview": [514, 192714],
     "mid_block": [192714, 320056],
+    "mid_block_header": [192714, 193304],
+    "mid_block_image": [193304, 320056],
     "artwork": [320056, 627616],
     "glyph_atlas": [627616, 754368],
     "builder_blob_bytes": 1078368,

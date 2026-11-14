@@ -10,14 +10,15 @@ import java.util.List;
  * Layout of the 754368 byte uncompressed blob (measured, not guessed):
  *   0      .. 514      header / config
  *   514    .. 192714   preview 310x310 RGB565 big endian          (192200 bytes)
- *   192714 .. 320056   zero padding (one 62 byte sprite)
- *   320056 .. 754368   background 466x466 RGB565 big endian       (434312 bytes)
+ *   192714 .. 193304   590 byte mid-block header (stock zeros)
+ *   193304 .. 627616   screen 466x466 RGB565 big endian           (434312 bytes)
+ *   627616 .. 754368   glyph sprite atlas                         (126752 bytes)
  *
- * Inside the background block:
- *   rows   0 .. 329    artwork, displayed as the lower part of the round screen
- *   rows 330 .. 465    clock strip, displayed above the artwork (1:1, no scaling)
- * Replacing the strip rows is what turns the time into solid boxes, so they are
- * treated as a preserved band (see {@link #BG_ART_ROWS}).
+ * The screen image is contiguous: rows 0..135 start at 193304 and rows 136..465
+ * start at 320056, so the seam at row 136 is an address boundary, not a format
+ * split. The atlas after the image holds the clock/date/AM-PM sprites; replacing
+ * it is what turns the widgets into solid boxes, which is why the full-bleed
+ * builder repaints each sheet cell instead of overwriting the atlas.
  *
  * Only the two image regions are ever modified; every other byte is carried
  * over from the reference blob untouched.
@@ -68,13 +69,18 @@ public final class FaceBuilder {
     /** Strip height in screen rows, i.e. the height of the glyph-atlas area. */
     public static final int STRIP_ROWS = BG_H - BG_ART_ROWS;
 
-    /** Block between the preview and the artwork: 466x136 pixels plus 590 bytes. Nearly
-     *  all zeros in the reference blob, i.e. black - this is where the clock strip's own
-     *  background is expected to live. */
+    /** Block between the preview and the artwork. It is 127342 bytes: a 590 byte
+     *  header (stock zeros) followed by the top 466x136 screen rows. The pixels must
+     *  be written after that header, otherwise every row is displaced horizontally by
+     *  295 pixels and the top of a photo tears/wraps. */
     public static final int OFF_MID = 192714;
     public static final int MID_SIZE = 127342;
-    /** The presumed image part of the mid block: 466 * 136 * 2 bytes. */
+    /** The image part of the mid block: 466 * 136 * 2 bytes. */
     public static final int LEN_MID = BG_W * STRIP_ROWS * 2;
+    /** 590-byte header at the start of the mid block. */
+    public static final int MID_PREFIX = MID_SIZE - LEN_MID;
+    /** First pixel of the top 466x136 screen rows; ends exactly at {@link #OFF_BG}. */
+    public static final int OFF_MID_IMAGE = OFF_MID + MID_PREFIX;
 
     public static final int OFF_BG = 320056;
 
@@ -311,7 +317,7 @@ public final class FaceBuilder {
             return r;
         }
         byte[] blob = base.clone();
-        System.arraycopy(mid565, 0, blob, OFF_MID, LEN_MID);
+        System.arraycopy(mid565, 0, blob, OFF_MID_IMAGE, LEN_MID);
         return pack(base, blob);
     }
 

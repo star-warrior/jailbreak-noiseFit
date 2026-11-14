@@ -120,9 +120,10 @@
     },
     "mid_block": {
       "range": [192714, 320056],
+      "header_bytes": 590,
+      "image_range": [193304, 320056],
       "width": 466,
       "height": 136,
-      "tail_bytes": 590,
       "direction": "top",
       "status": "verified"
     },

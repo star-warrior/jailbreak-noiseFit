@@ -239,7 +239,8 @@ grid, upload, observe.
 | Region | Probe result | Conclusion |
 | --- | --- | --- |
 | `514 .. 192714` | no visible change | face-list preview only |
-| `192714 .. 320056` | clock bar lights up, digits crisp | stored bar image |
+| `192714 .. 193304` | no visible change | mid-block prefix header |
+| `193304 .. 320056` | top 136 rows change | screen top band |
 | `320056 .. 627616` | lower 330 rows change | artwork block |
 | `627616 .. 754368` | digits become solid cells | glyph sprite sheets |
 
