@@ -147,7 +147,7 @@ the same byte count as the Java one on the same blob.
 16    4     u32le vendor checksum of the payload
 20    4     u32le reserved
 24    2     u16le block count
-26    2*n   u16le per block: 0x8000 | compressed size
+26    2*n   u16le per block: 0x8000 set = LZO, clear = raw
 26+2n ...   n LZO1X blocks of 4096 bytes
 ```
 

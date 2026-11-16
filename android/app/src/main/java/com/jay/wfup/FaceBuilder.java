@@ -204,6 +204,8 @@ public final class FaceBuilder {
         public byte[] container;
         public int compressedSize;
         public int[] blockSizes;
+        /** True for blocks stored verbatim (table flag 0x8000 clear), vendor style. */
+        public boolean[] blockRaw;
         public String error;
         public boolean ok() { return error == null; }
     }
@@ -335,6 +337,7 @@ public final class FaceBuilder {
         int payloadCap = blob.length + blob.length / 8 + blockCount * 8 + 1024;
         byte[] payload = new byte[payloadCap];
         int payloadLen = 0;
+        r.blockRaw = new boolean[blockCount];
 
         for (int b = 0; b < blockCount; b++) {
             int off = b * BLOCK;
@@ -346,13 +349,23 @@ public final class FaceBuilder {
                 r.error = "compress failed on block " + b + ": " + e.getMessage();
                 return r;
             }
-            if (n >= 0x8000) {
-                r.error = "block " + b + " compressed to " + n + "B, exceeds 0x7fff table field";
+            // Vendor semantics (LzoUtils.mergeDialFile): a block is stored raw with the
+            // 0x8000 flag clear when compression does not shrink it. Incompressible
+            // photo blocks therefore never inflate the payload.
+            boolean raw = n >= len;
+            int stored = raw ? len : n;
+            if (stored >= 0x8000) {
+                r.error = "block " + b + " stored as " + stored + "B, exceeds 0x7fff table field";
                 return r;
             }
-            r.blockSizes[b] = n;
-            System.arraycopy(out, 0, payload, payloadLen, n);
-            payloadLen += n;
+            r.blockRaw[b] = raw;
+            r.blockSizes[b] = stored;
+            if (raw) {
+                System.arraycopy(blob, off, payload, payloadLen, len);
+            } else {
+                System.arraycopy(out, 0, payload, payloadLen, n);
+            }
+            payloadLen += stored;
         }
 
         int header = 26 + 2 * blockCount;
@@ -371,7 +384,7 @@ public final class FaceBuilder {
         c[24] = (byte) (blockCount & 0xff);
         c[25] = (byte) ((blockCount >> 8) & 0xff);
         for (int b = 0; b < blockCount; b++) {
-            int v = 0x8000 | r.blockSizes[b];
+            int v = (r.blockRaw[b] ? 0 : 0x8000) | r.blockSizes[b];
             c[26 + b * 2] = (byte) (v & 0xff);
             c[26 + b * 2 + 1] = (byte) ((v >> 8) & 0xff);
         }
@@ -435,13 +448,24 @@ public final class FaceBuilder {
         int ip = header;
         for (int b = 0; b < count; b++) {
             int v = (container[26 + b * 2] & 0xff) | ((container[26 + b * 2 + 1] & 0xff) << 8);
+            // 0x8000 set means LZO compressed (vendor LzoUtils.mergeDialFile); clear
+            // means the block is stored raw because compressing it did not help.
+            boolean compressed = (v & 0x8000) != 0;
             int size = v & 0x7fff;
             int expectLen = Math.min(BLOCK, unc - b * BLOCK);
             int n;
-            try {
-                n = Lzo1x.decompress(container, ip, size, out, 0, out.length);
-            } catch (RuntimeException e) {
-                return "FAIL: block " + b + " decode: " + e.getMessage();
+            if (compressed) {
+                try {
+                    n = Lzo1x.decompress(container, ip, size, out, 0, out.length);
+                } catch (RuntimeException e) {
+                    return "FAIL: block " + b + " decode: " + e.getMessage();
+                }
+            } else {
+                if (size != expectLen) {
+                    return "FAIL: raw block " + b + " holds " + size + "B, expected " + expectLen;
+                }
+                System.arraycopy(container, ip, out, 0, size);
+                n = size;
             }
             if (n != expectLen) return "FAIL: block " + b + " decoded " + n + "B, expected " + expectLen;
             System.arraycopy(out, 0, got, gp, n);

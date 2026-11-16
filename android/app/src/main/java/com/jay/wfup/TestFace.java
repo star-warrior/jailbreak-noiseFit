@@ -24,6 +24,23 @@ public class TestFace {
         }
         System.out.println("blob " + blob.length + " ok");
 
+        // geometry: the screen image must be contiguous across the mid-block seam
+        if (FaceBuilder.OFF_PREVIEW + FaceBuilder.LEN_PREVIEW != FaceBuilder.OFF_MID) {
+            System.out.println("FATAL preview does not end at OFF_MID"); System.exit(5);
+        }
+        if (FaceBuilder.OFF_MID_IMAGE + FaceBuilder.LEN_MID != FaceBuilder.OFF_BG) {
+            System.out.println("FATAL mid image does not end at OFF_BG: "
+                    + (FaceBuilder.OFF_MID_IMAGE + FaceBuilder.LEN_MID)); System.exit(5);
+        }
+        if (FaceBuilder.OFF_BG + FaceBuilder.BG_W * FaceBuilder.BG_ART_ROWS * 2 != FaceBuilder.OFF_ATLAS) {
+            System.out.println("FATAL artwork does not end at OFF_ATLAS"); System.exit(5);
+        }
+        if (FaceBuilder.OFF_ATLAS + 126752 != FaceBuilder.BLOB_SIZE) {
+            System.out.println("FATAL atlas does not end at BLOB_SIZE"); System.exit(5);
+        }
+        System.out.println("geometry ok: mid image " + FaceBuilder.OFF_MID_IMAGE + ".." + FaceBuilder.OFF_BG
+                + " (" + FaceBuilder.MID_PREFIX + "B header)");
+
         // 1) decode real container if given
         if (args.length > 1) {
             byte[] real = Files.readAllBytes(new File(args[1]).toPath());

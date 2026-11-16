@@ -191,7 +191,7 @@ The NoiseFit Halo reference values are shown below. For any other model, treat t
 | Magic             | `afafaf02`                                             |
 | Uncompressed size | 754368 (466 x 466 x 2)                                 |
 | Block count       | 185                                                    |
-| Block table       | 185 entries x 2 bytes, `0x8000 \| compressed size`     |
+| Block table       | 185 entries x 2 bytes, `0x8000` set = LZO, clear = raw |
 | Header size       | `26 + 2 * block_count` = 396 bytes for 185 blocks        |
 | Payload           | LZO1X, one stream per 4096-byte block                  |
 | Checksums         | field 8 = blob checksum, field 16 = payload checksum   |

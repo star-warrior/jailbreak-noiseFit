@@ -28,7 +28,7 @@
     "block_bytes": 4096,
     "header_size_formula": "26 + 2 * block_count",
     "header_size_reference": 396,
-    "block_table_entry": "u16le, 0x8000 | compressed_size",
+    "block_table_entry": "u16le, 0x8000 set = lzo_size, clear = raw_size",
     "compression": "LZO1X",
     "checksums": {
       "field_8": "vendor checksum of the uncompressed blob",

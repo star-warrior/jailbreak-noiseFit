@@ -155,7 +155,7 @@ gate at 2 000 000 B with an explicit override.
 16    4     u32le  vendor checksum of the compressed payload
 20    4     u32le  reserved, 0
 24    2     u16le  block count
-26    2*n   u16le  per-block entries: 0x8000 | compressed block size
+26    2*n   u16le  per-block: 0x8000 set = LZO size, clear = raw size
 26+2n ...   payload: n LZO1X blocks of 4096 bytes, last block the remainder
 ```
 

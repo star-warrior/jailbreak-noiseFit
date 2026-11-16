@@ -164,7 +164,7 @@ One 22-chunk window takes about 0.56 s. Flooding without waiting produces the
 16    4   u32le vendor checksum of payload
 20    4   u32le reserved
 24    2   u16le block count              185
-26    2n  u16le block entries            0x8000 | compressed size
+26    2n  u16le block entries  0x8000 set = LZO, clear = raw
 26+2n     payload                        n LZO1X blocks of 4096 bytes
 ```
 
